@@ -25,7 +25,6 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent
 OUI_FILE = PLUGIN_DIR / "data" / "oui.json"
 MAX_STATE_BYTES = 2 * 1024 * 1024  # 2 MB
 
-# Comprehensive port list for homelab LXCs, Docker apps, Dokploy, Proxmox, Media, and Security
 PROBE_PORTS = [
     21,    # FTP (Insecure plaintext auth)
     22,    # SSH
@@ -234,50 +233,34 @@ def discover_mdns_devices():
     return mdns_info
 
 
-def check_port_open(ip: str, port: int):
-    """Probes a single TCP port with robust timeout tolerance for multi-hop Wi-Fi networks."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(1.2)
-    t0 = time.perf_counter()
-    banner = ""
-    try:
-        res = s.connect_ex((ip, port))
-        if res == 0:
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            if port == 22:
-                try:
-                    s.settimeout(0.6)
-                    raw_b = s.recv(256).decode('latin1', errors='ignore').strip()
-                    if raw_b.startswith("SSH-"):
-                        banner = raw_b
-                except Exception:
-                    pass
-            return port, elapsed_ms, banner
-    except Exception:
-        pass
-    finally:
-        s.close()
-    return port, None, ""
-
-
 def probe_single_host(ip: str):
-    """Probes open ports across all defined service vectors with multi-threading and banner grabbing."""
+    """Probes open ports and grabs SSH banner sequentially per host."""
     open_ports = []
     latencies = []
     ssh_banner = ""
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(PROBE_PORTS)) as executor:
-        futures = [executor.submit(check_port_open, ip, p) for p in PROBE_PORTS]
-        for f in concurrent.futures.as_completed(futures):
-            try:
-                p, lat, ban = f.result()
-                if lat is not None:
-                    open_ports.append(p)
-                    latencies.append(lat)
-                    if ban:
-                        ssh_banner = ban
-            except Exception:
-                pass
+    for port in PROBE_PORTS:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.35)
+        t0 = time.perf_counter()
+        try:
+            res = s.connect_ex((ip, port))
+            if res == 0:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                open_ports.append(port)
+                latencies.append(elapsed_ms)
+                if port == 22 and not ssh_banner:
+                    try:
+                        s.settimeout(0.5)
+                        raw_b = s.recv(256).decode('latin1', errors='ignore').strip()
+                        if raw_b.startswith("SSH-"):
+                            ssh_banner = raw_b
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        finally:
+            s.close()
 
     open_ports.sort()
     avg_latency = round(min(latencies), 1) if latencies else None
@@ -303,7 +286,7 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
     """Evaluates device role, OS fingerprint (Ubuntu/Debian/PVE), open ports, security warnings, and category tag."""
     warnings = []
     risk_level = "clean"
-    category = "green"  # "green" (verified/clean), "orange" (ap/info), "red" (security warning/vulnerability)
+    category = "green"
 
     p_set = set(open_ports)
     v_lower = vendor.lower()
@@ -347,19 +330,19 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
 
     # 2. Device Role & OS Identification
     if ip == local_ip:
-        return "This Machine (Host)", "󰌢", m_name or "Linux Workstation", warnings, risk_level, "green"
+        return "This Machine (Host)", "󰌢", m_name or "Linux Workstation (yuuki)", warnings, risk_level, "green"
     if is_repeater:
         return "Repeater / AP Bridge", "󰀝", "Wi-Fi Client Bridge / Repeater", warnings, risk_level, "orange"
     if ip == gateway_ip:
         return "Gateway / Router", "󰖟", f"{vendor} Gateway", warnings, risk_level, "green"
 
-    # Specific Proxmox VE Nodes (Ports 8006, 3128, or Corosync)
+    # Specific Proxmox VE Nodes (Ports 8006, 3128, or Proxmox nodes)
     if 8006 in p_set or 3128 in p_set:
-        return "Proxmox VE Node", "󰒋", m_name or "Proxmox Virtualization Hypervisor", warnings, risk_level, "green"
+        return "Proxmox VE Node", "󰒋", m_name or "Proxmox VE Node", warnings, risk_level, "green"
 
-    # Specific Dokploy & App Containers (e.g. .60)
-    if 3000 in p_set and (80 in p_set or 8080 in p_set or 8096 in p_set):
-        return "Dokploy / Container LXC", "󰒋", m_name or "Dokploy Container Host", warnings, risk_level, "green"
+    # Specific Dokploy & App Containers (e.g. .60, .9, .11, .97)
+    if 3000 in p_set and (80 in p_set or 8080 in p_set or 8096 in p_set or 22 in p_set):
+        return "Dokploy / Container Host", "󰒋", m_name or "Dokploy Container Host", warnings, risk_level, "green"
 
     # KASM Workspaces Host (.108)
     if ip == "192.168.100.108" or (443 in p_set and "ubuntu" in banner_lower):
@@ -367,41 +350,40 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
 
     # Jellyfin Media Server
     if 8096 in p_set or 8097 in p_set:
-        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Streaming Server", warnings, risk_level, "green"
+        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Media Server", warnings, risk_level, "green"
 
     # Portainer / Docker Management
     if 9000 in p_set or 9443 in p_set:
-        return "Portainer Docker Host", "󰒋", m_name or "Portainer Management Server", warnings, risk_level, "green"
+        return "Portainer Docker Host", "󰒋", m_name or "Portainer Docker Host", warnings, risk_level, "green"
 
     # Home Assistant
     if 8123 in p_set or "home assistant" in v_lower:
-        return "Home Assistant Hub", "󰒋", m_name or "Home Assistant Smart Hub", warnings, risk_level, "green"
+        return "Home Assistant Hub", "󰒋", m_name or "Home Assistant Hub", warnings, risk_level, "green"
 
     # IP Cameras
     if 554 in p_set or (8000 in p_set and 80 in p_set) or "hikvision" in v_lower or "dahua" in v_lower:
         return "IP Camera / NVR", "󰄹", m_name or f"{vendor} Security Camera", warnings, risk_level, "green"
 
     # DNS / Pi-hole
-    if 53 in p_set and (80 in p_set or 443 in p_set):
-        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Blocking Server", warnings, risk_level, "green"
+    if 53 in p_set:
+        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Block Server", warnings, risk_level, "green"
 
     # SSH Banner-Based OS Detection
     if "ubuntu" in banner_lower:
-        os_label = "Ubuntu Linux LXC" if ("deb13" in banner_lower or "lxc" in banner_lower or ip.startswith("192.168.100.")) else "Ubuntu Linux Host"
-        return "Ubuntu Linux Host", "󰕈", m_name or os_label, warnings, risk_level, "green"
+        return "Ubuntu Linux Host / LXC", "󰕈", m_name or "Ubuntu Linux Host", warnings, risk_level, "green"
 
     if "debian" in banner_lower:
-        return "Debian Linux Node", "󰣚", m_name or "Debian Linux Host / LXC", warnings, risk_level, "green"
+        return "Debian Linux Node / LXC", "󰣚", m_name or "Debian Linux LXC", warnings, risk_level, "green"
 
     # Web & Development Servers
     if 3000 in p_set or 3001 in p_set or 5000 in p_set or 5173 in p_set:
         return "Web App / Dev Server", "󰒋", m_name or "Web Application Server", warnings, risk_level, "green"
     if 22 in p_set and (80 in p_set or 443 in p_set):
-        return "Linux Web Server", "󰒋", m_name or "Linux Server (SSH+Web)", warnings, risk_level, "green"
+        return "Linux Web Server", "󰒋", m_name or "Linux Web Server", warnings, risk_level, "green"
     if 22 in p_set:
-        return "Linux Host (SSH)", "󰒋", m_name or "Linux Server (SSH)", warnings, risk_level, "green"
+        return "Linux Host (SSH)", "󰒋", m_name or "Linux Host (SSH)", warnings, risk_level, "green"
     if 445 in p_set or 139 in p_set:
-        return "Windows / Samba Host", "󰍹", m_name or "Samba / Windows Client", warnings, risk_level, "green"
+        return "Windows / Samba Host", "󰍹", m_name or "Samba / Windows Host", warnings, risk_level, "green"
 
     # mDNS Device Detection
     if m_type == "phone" or "galaxy" in m_name.lower() or "iphone" in m_name.lower() or "pixel" in m_name.lower() or "android" in m_name.lower():
@@ -414,11 +396,11 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
     if "apple" in v_lower:
         return "Apple Device", "󰀵", m_name or "Apple Device", warnings, risk_level, "green"
     if "samsung" in v_lower or "xiaomi" in v_lower or "google" in v_lower:
-        return "Mobile / Smart Device", "󰄜", m_name or f"{vendor} Smart Device", warnings, risk_level, "green"
+        return "Mobile / Smart Device", "󰄜", m_name or f"{vendor} Device", warnings, risk_level, "green"
     if "raspberry" in v_lower or "espressif" in v_lower or "tuya" in v_lower:
         return "IoT / Microcontroller", "󰘚", m_name or f"{vendor} IoT Appliance", warnings, risk_level, "green"
 
-    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Host"), warnings, risk_level, ("orange" if not open_ports else "green")
+    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Device"), warnings, risk_level, ("orange" if not open_ports else "green")
 
 
 def perform_network_scan():
@@ -475,7 +457,7 @@ def perform_network_scan():
 
     # 4. Multi-threaded Port, Banner, and Security Probing across ALL devices
     probe_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         future_map = {executor.submit(probe_single_host, d["ip"]): d["ip"] for d in device_list}
         for future in concurrent.futures.as_completed(future_map):
             ip = future_map[future]
@@ -547,7 +529,7 @@ def perform_network_scan():
                 })
                 total_downstream_hosts += 1
 
-            # Sort downstream hosts so active services (Dokploy, Proxmox, Ubuntu) appear first
+            # Sort downstream hosts so active services (Proxmox, Dokploy, Ubuntu) appear first
             downstream.sort(key=lambda d: (len(d["openPorts"]) * -1, 0 if d["guessedType"] != "Generic Host" else 1))
 
             repeater_cat = "red" if repeater_has_red else "orange"
