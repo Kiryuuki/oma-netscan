@@ -20,12 +20,14 @@ Panel {
   property var netscanData: hostWidget ? hostWidget.netscanState : ({
     updatedAt: 0,
     subnet: "192.168.100.0/24",
+    localIp: "192.168.100.3",
     gatewayIp: "192.168.100.1",
     gatewayOnline: true,
     totalHosts: 0,
     distinctHostsCount: 0,
     repeaterDevicesCount: 0,
     repeatersCount: 0,
+    securityWarningsCount: 0,
     hasCapError: false,
     hosts: []
   })
@@ -124,7 +126,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(560))
+    contentWidth: panel.fittedContentWidth(Style.space(580))
     contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(720))
 
     PanelKeyCatcher {
@@ -267,7 +269,7 @@ Panel {
             }
           }
 
-          // --- STATS BAR ---
+          // --- STATS & SECURITY BAR ---
           BorderSurface {
             width: parent.width - Style.space(28)
             implicitHeight: Style.space(34)
@@ -279,11 +281,11 @@ Panel {
               anchors.left: parent.left
               anchors.leftMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(16)
+              spacing: Style.space(14)
 
               Text {
                 textFormat: Text.PlainText
-                text: "󰄲 " + (root.netscanData.distinctHostsCount || 0) + " Distinct Hosts"
+                text: "󰄲 " + (root.netscanData.distinctHostsCount || 0) + " Hosts"
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -292,11 +294,21 @@ Panel {
 
               Text {
                 textFormat: Text.PlainText
-                text: "󰀝 " + (root.netscanData.repeatersCount || 0) + " AP / Repeater (" + (root.netscanData.repeaterDevicesCount || 0) + " IPs)"
+                text: "󰀝 " + (root.netscanData.repeatersCount || 0) + " AP (" + (root.netscanData.repeaterDevicesCount || 0) + " Devices)"
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 color: "#f59e0b"
+              }
+
+              Text {
+                visible: root.netscanData.securityWarningsCount > 0
+                textFormat: Text.PlainText
+                text: "󰚌 " + root.netscanData.securityWarningsCount + " Security Alerts"
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                color: "#ef4444"
               }
             }
 
@@ -335,7 +347,11 @@ Panel {
                 color: isSelected
                   ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
                   : (hostMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.06) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.02))
-                borderSpec: Border.controlSpec(isSelected ? "focus" : "normal", isSelected ? Color.accent : Qt.darker(root.contentForeground, 2.5), Color.accent)
+                borderSpec: Border.controlSpec(
+                  modelData.riskLevel === "critical" ? "error" : (isSelected ? "focus" : "normal"),
+                  modelData.riskLevel === "critical" ? "#ef4444" : (isSelected ? Color.accent : Qt.darker(root.contentForeground, 2.5)),
+                  Color.accent
+                )
 
                 Column {
                   id: hostCol
@@ -345,7 +361,7 @@ Panel {
                   anchors.margins: Style.space(10)
                   spacing: Style.space(6)
 
-                  // Line 1: Type Icon, IP / Summary, Badges
+                  // Line 1: Type Icon, Device Name, IP & Badges
                   Item {
                     width: parent.width
                     implicitHeight: Style.space(22)
@@ -360,17 +376,31 @@ Panel {
                         text: modelData.typeIcon || "󰖩"
                         font.family: root.contentFontFamily
                         font.pixelSize: Style.font.body
-                        color: isRepeater ? "#f59e0b" : (modelData.isGateway ? "#3b82f6" : Color.accent)
+                        color: isRepeater ? "#f59e0b" : (modelData.isSelf ? "#10b981" : (modelData.isGateway ? "#3b82f6" : Color.accent))
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
+                      // Primary Title: Friendly Name or IP
                       Text {
                         textFormat: Text.PlainText
-                        text: isRepeater ? modelData.summary : (modelData.ip + (modelData.hostname ? " (" + modelData.hostname + ")" : ""))
+                        text: isRepeater
+                          ? modelData.summary
+                          : (modelData.friendlyName || modelData.ip)
                         font.family: root.contentFontFamily
                         font.pixelSize: Style.font.bodySmall
                         font.bold: true
                         color: root.contentForeground
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      // Secondary IP display if friendly name exists
+                      Text {
+                        visible: !isRepeater && !!modelData.friendlyName && modelData.friendlyName !== modelData.ip
+                        textFormat: Text.PlainText
+                        text: "(" + modelData.ip + ")"
+                        font.family: "Monospace"
+                        font.pixelSize: 11
+                        color: root.contentSubtle
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
@@ -379,7 +409,13 @@ Panel {
                         height: Style.space(18)
                         implicitWidth: roleText.implicitWidth + Style.space(10)
                         radius: 4
-                        color: isRepeater ? Qt.rgba(0.96, 0.62, 0.04, 0.2) : (modelData.isGateway ? Qt.rgba(0.23, 0.51, 0.96, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2))
+                        color: isRepeater
+                          ? Qt.rgba(0.96, 0.62, 0.04, 0.2)
+                          : (modelData.isSelf
+                              ? Qt.rgba(0.06, 0.72, 0.51, 0.2)
+                              : (modelData.isGateway
+                                  ? Qt.rgba(0.23, 0.51, 0.96, 0.2)
+                                  : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)))
                         anchors.verticalCenter: parent.verticalCenter
 
                         Text {
@@ -390,7 +426,7 @@ Panel {
                           font.family: root.contentFontFamily
                           font.pixelSize: 11
                           font.bold: true
-                          color: isRepeater ? "#f59e0b" : (modelData.isGateway ? "#60a5fa" : Color.accent)
+                          color: isRepeater ? "#f59e0b" : (modelData.isSelf ? "#10b981" : (modelData.isGateway ? "#60a5fa" : Color.accent))
                         }
                       }
                     }
@@ -434,21 +470,34 @@ Panel {
                         font.pixelSize: 11
                         color: root.contentSubtle
                       }
+
+                      Text {
+                        visible: !isRepeater && modelData.latencyMs !== null && modelData.latencyMs !== undefined
+                        textFormat: Text.PlainText
+                        text: "· " + modelData.latencyMs + "ms"
+                        font.family: root.contentFontFamily
+                        font.pixelSize: 11
+                        color: "#10b981"
+                      }
                     }
 
-                    // Open Ports tags
+                    // Open Ports tags with service names
                     Row {
                       anchors.right: parent.right
                       anchors.verticalCenter: parent.verticalCenter
                       spacing: 4
-                      visible: !isRepeater && modelData.openPorts && modelData.openPorts.length > 0
+                      visible: !isRepeater && modelData.portLabels && modelData.portLabels.length > 0
                       Repeater {
-                        model: (modelData.openPorts || []).slice(0, 5)
+                        model: (modelData.portLabels || []).slice(0, 4)
                         delegate: Rectangle {
                           height: 16
                           implicitWidth: portText.implicitWidth + 8
                           radius: 3
-                          color: Qt.rgba(0.06, 0.72, 0.51, 0.16)
+                          color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1)
+                            ? Qt.rgba(0.94, 0.27, 0.27, 0.2)
+                            : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1
+                                ? Qt.rgba(0.96, 0.62, 0.04, 0.2)
+                                : Qt.rgba(0.06, 0.72, 0.51, 0.16))
                           Text {
                             id: portText
                             anchors.centerIn: parent
@@ -456,7 +505,53 @@ Panel {
                             text: String(modelData)
                             font.family: "Monospace"
                             font.pixelSize: 10
-                            color: "#10b981"
+                            color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1)
+                              ? "#ef4444"
+                              : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1
+                                  ? "#f59e0b"
+                                  : "#10b981")
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // Security Warnings Row (if any active vulnerabilities / exposures)
+                  Row {
+                    visible: !isRepeater && modelData.warnings && modelData.warnings.length > 0
+                    spacing: 6
+                    Repeater {
+                      model: modelData.warnings || []
+                      delegate: Rectangle {
+                        height: 18
+                        implicitWidth: warnText.implicitWidth + 12
+                        radius: 3
+                        color: modelData.severity === "critical"
+                          ? Qt.rgba(0.94, 0.27, 0.27, 0.15)
+                          : (modelData.severity === "warning"
+                              ? Qt.rgba(0.96, 0.62, 0.04, 0.15)
+                              : Qt.rgba(0.23, 0.51, 0.96, 0.15))
+                        border.color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#3b82f6")
+                        border.width: 1
+
+                        Row {
+                          anchors.centerIn: parent
+                          spacing: 4
+                          Text {
+                            textFormat: Text.PlainText
+                            text: modelData.severity === "critical" ? "󰚌" : (modelData.severity === "warning" ? "󰌵" : "󰋼")
+                            font.family: root.contentFontFamily
+                            font.pixelSize: 10
+                            color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#3b82f6")
+                          }
+                          Text {
+                            id: warnText
+                            textFormat: Text.PlainText
+                            text: modelData.text
+                            font.family: root.contentFontFamily
+                            font.pixelSize: 10
+                            font.bold: true
+                            color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#60a5fa")
                           }
                         }
                       }
@@ -523,7 +618,7 @@ Panel {
                   delegate: BorderSurface {
                     required property var modelData
                     width: parent.width - Style.space(16)
-                    implicitHeight: Style.space(32)
+                    implicitHeight: Style.space(34)
                     radius: 4
                     color: downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
                     borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.5), Color.accent)
@@ -549,7 +644,7 @@ Panel {
 
                         Text {
                           textFormat: Text.PlainText
-                          text: modelData.ip
+                          text: modelData.friendlyName || modelData.ip
                           font.family: root.contentFontFamily
                           font.pixelSize: Style.font.caption
                           font.bold: true
@@ -558,10 +653,20 @@ Panel {
                         }
 
                         Text {
+                          visible: !!modelData.friendlyName && modelData.friendlyName !== modelData.ip
+                          textFormat: Text.PlainText
+                          text: "(" + modelData.ip + ")"
+                          font.family: "Monospace"
+                          font.pixelSize: 10
+                          color: root.contentSubtle
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
                           textFormat: Text.PlainText
                           text: modelData.guessedType || "Generic Device"
                           font.family: root.contentFontFamily
-                          font.pixelSize: 11
+                          font.pixelSize: 10
                           color: root.contentSubtle
                           anchors.verticalCenter: parent.verticalCenter
                         }
@@ -592,24 +697,70 @@ Panel {
             }
           }
 
-          // --- FOOTER SHORTCUTS ---
+          // --- FOOTER SHORTCUTS (CLEAN 2-ROW GRID) ---
           BorderSurface {
             width: parent.width - Style.space(28)
-            implicitHeight: Style.space(32)
+            implicitHeight: Style.space(52)
             radius: Style.cornerRadius
             color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.02)
             borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.0), Color.accent)
 
-            Row {
+            Column {
               anchors.centerIn: parent
-              spacing: Style.space(12)
+              spacing: Style.space(4)
 
-              Text {
-                textFormat: Text.PlainText
-                text: "[r] Rescan  ·  [d] Deep Scan  ·  [c] Copy IP  ·  [m] Copy MAC  ·  [e] Toggle Repeater  ·  [Esc] Close"
-                font.family: root.contentFontFamily
-                font.pixelSize: 11
-                color: root.contentSubtle
+              Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Style.space(16)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: "<b>[r]</b> Rescan Subnet"
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.contentSubtle
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: "<b>[d]</b> Deep Port Scan"
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.contentSubtle
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: "<b>[c]</b> Copy IP Address"
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.contentSubtle
+                }
+              }
+
+              Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Style.space(16)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: "<b>[m]</b> Copy MAC Address"
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.contentSubtle
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: "<b>[e]</b> Expand AP List"
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.contentSubtle
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: "<b>[Esc]</b> Close"
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.contentSubtle
+                }
               }
             }
           }

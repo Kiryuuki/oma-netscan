@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-OmaNetscan Discovery & Fingerprinting Engine
-High-performance local network scanner with Proxy-ARP repeater de-duplication,
-offline OUI vendor lookups, non-intrusive heuristic fingerprinting, and descriptor-safe atomic writes.
+OmaNetscan Discovery, Fingerprinting & Security Engine
+High-performance local network scanner with mDNS device resolution,
+Proxy-ARP repeater de-duplication, offline OUI vendor lookups, port security audits,
+exposure warnings, and descriptor-safe atomic writes.
 """
 
 import argparse
@@ -24,7 +25,52 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent
 OUI_FILE = PLUGIN_DIR / "data" / "oui.json"
 MAX_STATE_BYTES = 1024 * 1024  # 1 MB
 
-PROBE_PORTS = [80, 443, 8006, 8096, 554, 8000, 22, 53, 445, 139, 3000, 8080, 9000, 5000, 8123, 1883, 1900]
+# Extended port scanning list including security exposure vectors
+PROBE_PORTS = [
+    21,    # FTP (Insecure plaintext auth)
+    22,    # SSH
+    23,    # Telnet (Critical insecure plaintext)
+    53,    # DNS
+    80,    # HTTP
+    139,   # NetBIOS
+    443,   # HTTPS
+    445,   # SMB
+    554,   # RTSP Video Stream
+    1883,  # MQTT Broker
+    2375,  # Docker Daemon (Insecure unauthenticated API)
+    3000,  # Dev / Node Web App
+    3389,  # RDP Remote Desktop
+    5000,  # Docker Registry / Synology DSM
+    8000,  # DVR / Hikvision Web Admin / Dev
+    8006,  # Proxmox VE Web GUI
+    8080,  # HTTP Alt / Proxy
+    8096,  # Jellyfin Media Server
+    8123,  # Home Assistant
+    9000,  # Portainer
+]
+
+PORT_NAMES = {
+    21: "FTP (Plaintext)",
+    22: "SSH",
+    23: "Telnet (Insecure)",
+    53: "DNS",
+    80: "HTTP",
+    139: "NetBIOS",
+    443: "HTTPS",
+    445: "SMB",
+    554: "RTSP Stream",
+    1883: "MQTT",
+    2375: "Docker API",
+    3000: "App (3000)",
+    3389: "RDP",
+    5000: "API/DSM (5000)",
+    8000: "DVR/Admin",
+    8006: "Proxmox VE",
+    8080: "HTTP Alt",
+    8096: "Jellyfin",
+    8123: "Home Assistant",
+    9000: "Portainer"
+}
 
 
 def load_oui_table():
@@ -86,12 +132,10 @@ def resolve_vendor(mac: str) -> str:
     if prefix in OUI_TABLE:
         return OUI_TABLE[prefix]
     
-    # Check 6-hex format without colons
     prefix_clean = prefix.replace(":", "")
     if prefix_clean in OUI_TABLE:
         return OUI_TABLE[prefix_clean]
 
-    # Check locally administered MAC bit (2nd char is 2, 6, A, E)
     if len(norm) >= 2 and norm[1] in "26aee":
         return "Locally Administered / Virtual"
 
@@ -109,20 +153,72 @@ def get_default_gateway():
     return "192.168.100.1", "wlo1"
 
 
-def get_local_subnet():
+def get_local_ip_and_subnet():
+    gw, iface = get_default_gateway()
+    local_ip = ""
+    subnet = "192.168.100.0/24"
     try:
-        gw, iface = get_default_gateway()
         res = subprocess.run(["ip", "route", "show", "dev", iface], capture_output=True, text=True, timeout=2)
         for line in res.stdout.splitlines():
             if "scope link" in line and "/" in line:
-                return line.split()[0]
+                parts = line.split()
+                subnet = parts[0]
+                if "src" in parts:
+                    local_ip = parts[parts.index("src") + 1]
     except Exception:
         pass
-    return "192.168.100.0/24"
+    if not local_ip:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((gw, 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            local_ip = "192.168.100.3"
+    return local_ip, subnet
+
+
+def discover_mdns_devices():
+    """Queries avahi-browse for mDNS friendly names, device models, and types."""
+    mdns_info = {}
+    try:
+        res = subprocess.run(["avahi-browse", "-artp", "-t"], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if line.startswith("="):
+                    parts = line.split(";")
+                    if len(parts) >= 8:
+                        ip = parts[7].strip()
+                        hostname = parts[6].strip()
+                        txt_records = parts[9] if len(parts) > 9 else ""
+                        
+                        friendly_name = ""
+                        device_type = ""
+                        
+                        # Extract name and type from TXT records if available
+                        m_name = re.search(r'"name=([^"]+)"', txt_records)
+                        if m_name:
+                            friendly_name = m_name.group(1)
+                        m_type = re.search(r'"type=([^"]+)"', txt_records)
+                        if m_type:
+                            device_type = m_type.group(1)
+
+                        if not friendly_name:
+                            friendly_name = hostname.replace(".local", "")
+
+                        if ip:
+                            mdns_info[ip] = {
+                                "hostname": hostname,
+                                "friendlyName": friendly_name,
+                                "deviceType": device_type
+                            }
+    except Exception:
+        pass
+    return mdns_info
 
 
 def probe_single_host(ip: str):
-    """Probes open ports and calculates ping/TCP latency."""
+    """Probes open ports, calculates latency, and collects security banners."""
     open_ports = []
     latencies = []
     
@@ -141,7 +237,6 @@ def probe_single_host(ip: str):
         finally:
             s.close()
 
-    # Calculate average latency if any port responded, else fallback quick ICMP / TCP check
     avg_latency = round(min(latencies), 1) if latencies else None
 
     # rDNS lookup
@@ -160,52 +255,95 @@ def probe_single_host(ip: str):
     }
 
 
-def guess_device_type(vendor: str, open_ports: list, ip: str, gateway_ip: str, is_repeater: bool = False):
-    """Heuristic device fingerprinting."""
-    if is_repeater:
-        return "Repeater / AP Bridge", "󰀝"
-    if ip == gateway_ip:
-        return "Gateway / Router", "󰖟"
-    
+def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdns_entry: dict, local_ip: str, gateway_ip: str, is_repeater: bool = False):
+    """Evaluates device role, friendly label, open ports, and security warnings."""
+    warnings = []
+    risk_level = "clean"  # "clean", "info", "warning", "critical"
+
     p_set = set(open_ports)
     v_lower = vendor.lower()
+    m_name = mdns_entry.get("friendlyName", "")
+    m_type = mdns_entry.get("deviceType", "").lower()
 
-    if 8006 in p_set:
-        return "Proxmox VE Node", "󰒋"
-    if 8096 in p_set or 8097 in p_set:
-        return "Jellyfin Media Server", "󰎁"
-    if 554 in p_set or (8000 in p_set and 80 in p_set) or "hikvision" in v_lower or "dahua" in v_lower:
-        return "IP Camera", "󰄹"
-    if 8123 in p_set or "home assistant" in v_lower:
-        return "Home Assistant", "󰒋"
+    # 1. Security Exposure & Vulnerability Checks
+    if 23 in p_set:
+        warnings.append({"severity": "critical", "port": 23, "text": "Telnet Exposed (Insecure Plaintext)"})
+        risk_level = "critical"
+    if 2375 in p_set:
+        warnings.append({"severity": "critical", "port": 2375, "text": "Docker Daemon API Unprotected"})
+        risk_level = "critical"
+    if 21 in p_set:
+        warnings.append({"severity": "warning", "port": 21, "text": "FTP Server (Plaintext Authentication)"})
+        if risk_level != "critical":
+            risk_level = "warning"
     if 445 in p_set or 139 in p_set:
-        return "Samba / Windows Host", "󰍹"
-    if 53 in p_set:
-        return "DNS / Pi-hole Server", "󰒋"
-    if 3000 in p_set or 8080 in p_set or 9000 in p_set:
-        return "Container / App Host", "󰒋"
-    if 22 in p_set and (80 in p_set or 443 in p_set):
-        return "Linux Web Server", "󰒋"
-    if 22 in p_set:
-        return "Linux Host", "󰒋"
-    if "apple" in v_lower:
-        return "Apple Device", "󰀵"
-    if "samsung" in v_lower or "xiaomi" in v_lower or "google" in v_lower:
-        return "Mobile / Smart Device", "󰄜"
-    if "raspberry" in v_lower or "espressif" in v_lower or "tuya" in v_lower:
-        return "IoT / Microcontroller", "󰘚"
+        warnings.append({"severity": "info", "port": 445, "text": "SMB / NetBIOS File Sharing Active"})
+        if risk_level == "clean":
+            risk_level = "info"
+    if 3389 in p_set:
+        warnings.append({"severity": "warning", "port": 3389, "text": "RDP Remote Desktop Exposed"})
+        if risk_level != "critical":
+            risk_level = "warning"
+    if 554 in p_set:
+        warnings.append({"severity": "info", "port": 554, "text": "RTSP Media Stream Active"})
+        if risk_level == "clean":
+            risk_level = "info"
+    if 80 in p_set and 443 not in p_set and ip != gateway_ip:
+        warnings.append({"severity": "info", "port": 80, "text": "Unencrypted HTTP Interface"})
 
-    return "Generic Host", "󰖩"
+    # 2. Device Role & Model Identification
+    if ip == local_ip:
+        return "This Machine (Host)", "󰌢", m_name or "Linux Workstation", warnings, risk_level
+    if is_repeater:
+        return "Repeater / AP Bridge", "󰀝", "Wi-Fi Client Bridge / Repeater", warnings, risk_level
+    if ip == gateway_ip:
+        return "Gateway / Router", "󰖟", f"{vendor} Gateway", warnings, risk_level
+
+    # Check mDNS hints
+    if m_type == "phone" or "galaxy" in m_name.lower() or "iphone" in m_name.lower() or "pixel" in m_name.lower() or "android" in m_name.lower():
+        return "Mobile Phone", "󰄜", m_name or "Smartphone", warnings, risk_level
+    if "tv" in m_name.lower() or "chromecast" in m_name.lower() or "fire" in m_name.lower():
+        return "Smart TV / Media Player", "󰵪", m_name or "Smart TV", warnings, risk_level
+    if "printer" in m_name.lower() or "canon" in m_name.lower() or "epson" in m_name.lower() or "brother" in m_name.lower():
+        return "Network Printer", "󰐪", m_name or "Network Printer", warnings, risk_level
+
+    # Check port & vendor signatures
+    if 8006 in p_set:
+        return "Proxmox VE Node", "󰒋", m_name or "Proxmox Virtualization Hypervisor", warnings, risk_level
+    if 8096 in p_set or 8097 in p_set:
+        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Streaming Server", warnings, risk_level
+    if 554 in p_set or 8000 in p_set or "hikvision" in v_lower or "dahua" in v_lower:
+        return "IP Camera / NVR", "󰄹", m_name or f"{vendor} Security Camera", warnings, risk_level
+    if 8123 in p_set or "home assistant" in v_lower:
+        return "Home Assistant", "󰒋", m_name or "Home Assistant Hub", warnings, risk_level
+    if 53 in p_set and (80 in p_set or 443 in p_set):
+        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Blocking Server", warnings, risk_level
+    if 3000 in p_set or 8080 in p_set or 9000 in p_set:
+        return "Container / App Host", "󰒋", m_name or "Application / Container Server", warnings, risk_level
+    if 22 in p_set and (80 in p_set or 443 in p_set):
+        return "Linux Web Server", "󰒋", m_name or "Linux Server (SSH+Web)", warnings, risk_level
+    if 22 in p_set:
+        return "Linux Host (SSH)", "󰒋", m_name or "Linux Server (SSH)", warnings, risk_level
+    if 445 in p_set or 139 in p_set:
+        return "Windows / Samba Host", "󰍹", m_name or "Samba / Windows Client", warnings, risk_level
+    if "apple" in v_lower:
+        return "Apple Device", "󰀵", m_name or "Apple Workstation / Device", warnings, risk_level
+    if "samsung" in v_lower or "xiaomi" in v_lower or "google" in v_lower:
+        return "Mobile / Smart Device", "󰄜", m_name or f"{vendor} Smart Device", warnings, risk_level
+    if "raspberry" in v_lower or "espressif" in v_lower or "tuya" in v_lower:
+        return "IoT / Microcontroller", "󰘚", m_name or f"{vendor} IoT Appliance", warnings, risk_level
+
+    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Device"), warnings, risk_level
 
 
 def perform_network_scan():
-    """Performs fast ARP and Neighbor discovery."""
+    """Performs full ARP, mDNS, and security port discovery."""
     raw_devices = []
+    local_ip, subnet = get_local_ip_and_subnet()
     gateway_ip, gateway_iface = get_default_gateway()
-    subnet = get_local_subnet()
     has_cap_error = False
-    
-    # 1. Try arp-scan
+
+    # 1. ARP Scan
     try:
         res = subprocess.run(["arp-scan", "--localnet", "--plain", "-x"], capture_output=True, text=True, timeout=8)
         if res.returncode == 0:
@@ -235,9 +373,11 @@ def perform_network_scan():
     except Exception:
         pass
 
-    # Ensure Gateway is included
+    # Ensure Gateway & Local Host are included
     if gateway_ip and not any(d["ip"] == gateway_ip for d in raw_devices):
         raw_devices.append({"ip": gateway_ip, "mac": "", "rawVendor": ""})
+    if local_ip and not any(d["ip"] == local_ip for d in raw_devices):
+        raw_devices.append({"ip": local_ip, "mac": "", "rawVendor": ""})
 
     # Deduplicate by IP
     unique_devices = {}
@@ -245,7 +385,10 @@ def perform_network_scan():
         unique_devices[d["ip"]] = d
     device_list = list(unique_devices.values())
 
-    # 3. Multi-threaded Port and Fingerprint Probing
+    # 3. Discover mDNS Friendly Names in Parallel
+    mdns_info = discover_mdns_devices()
+
+    # 4. Multi-threaded Port and Security Probing
     probe_results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
         future_map = {executor.submit(probe_single_host, d["ip"]): d["ip"] for d in device_list}
@@ -256,7 +399,7 @@ def perform_network_scan():
             except Exception:
                 probe_results[ip] = {"openPorts": [], "latencyMs": None, "hostname": ""}
 
-    # 4. Proxy-ARP / Repeater De-duplication Clustering
+    # 5. Group by MAC Address & Classify
     mac_groups = {}
     for d in device_list:
         mac = d["mac"]
@@ -268,8 +411,8 @@ def perform_network_scan():
     repeaters_count = 0
     total_distinct_hosts = 0
     total_downstream_hosts = 0
+    total_security_warnings = 0
 
-    # Sort MAC groups so primary single hosts come first, then repeaters
     for mac, items in mac_groups.items():
         is_repeater = len(items) > 2
         vendor = resolve_vendor(mac)
@@ -282,15 +425,27 @@ def perform_network_scan():
             for item in sorted(items, key=lambda x: [int(p) for p in x["ip"].split(".")]):
                 ip = item["ip"]
                 pr = probe_results.get(ip, {})
-                g_type, g_icon = guess_device_type(vendor, pr.get("openPorts", []), ip, gateway_ip, is_repeater=False)
+                mdns_entry = mdns_info.get(ip, {})
+                g_type, g_icon, friendly_label, warnings, risk = analyze_security_and_fingerprint(
+                    ip, vendor, pr.get("openPorts", []), mdns_entry, local_ip, gateway_ip, is_repeater=False
+                )
+                if warnings:
+                    total_security_warnings += len(warnings)
+
                 downstream.append({
                     "ip": ip,
                     "mac": mac,
-                    "hostname": pr.get("hostname", ""),
+                    "hostname": mdns_entry.get("hostname") or pr.get("hostname", ""),
+                    "friendlyName": friendly_label,
                     "openPorts": pr.get("openPorts", []),
+                    "portLabels": [PORT_NAMES.get(p, str(p)) for p in pr.get("openPorts", [])],
                     "latencyMs": pr.get("latencyMs"),
                     "guessedType": g_type,
                     "typeIcon": g_icon,
+                    "warnings": warnings,
+                    "riskLevel": risk,
+                    "isSelf": ip == local_ip,
+                    "isGateway": ip == gateway_ip
                 })
                 total_downstream_hosts += 1
 
@@ -307,63 +462,76 @@ def perform_network_scan():
             for item in items:
                 ip = item["ip"]
                 pr = probe_results.get(ip, {})
-                g_type, g_icon = guess_device_type(vendor, pr.get("openPorts", []), ip, gateway_ip, is_repeater=False)
+                mdns_entry = mdns_info.get(ip, {})
+                g_type, g_icon, friendly_label, warnings, risk = analyze_security_and_fingerprint(
+                    ip, vendor, pr.get("openPorts", []), mdns_entry, local_ip, gateway_ip, is_repeater=False
+                )
+                if warnings:
+                    total_security_warnings += len(warnings)
+
                 structured_hosts.append({
                     "isRepeater": False,
                     "ip": ip,
                     "mac": mac if not mac.startswith("unknown-") else "",
                     "vendor": vendor,
-                    "hostname": pr.get("hostname", ""),
+                    "hostname": mdns_entry.get("hostname") or pr.get("hostname", ""),
+                    "friendlyName": friendly_label,
                     "openPorts": pr.get("openPorts", []),
+                    "portLabels": [PORT_NAMES.get(p, str(p)) for p in pr.get("openPorts", [])],
                     "latencyMs": pr.get("latencyMs"),
                     "guessedType": g_type,
                     "typeIcon": g_icon,
+                    "warnings": warnings,
+                    "riskLevel": risk,
+                    "isSelf": ip == local_ip,
                     "isGateway": ip == gateway_ip
                 })
                 total_distinct_hosts += 1
 
-    # Sort structured hosts: Gateway first, then distinct hosts sorted by IP, then repeaters
+    # Sort structured hosts: Gateway first, This Machine second, distinct hosts sorted by IP, then repeaters
     def sort_key(h):
         if h.get("isGateway"):
             return (0, 0, 0, 0)
+        if h.get("isSelf"):
+            return (1, 0, 0, 0)
         if not h.get("isRepeater"):
-            return (1, *[int(p) for p in h["ip"].split(".")])
-        return (2, h.get("deviceCount", 0) * -1, 0, 0)
+            return (2, *[int(p) for p in h["ip"].split(".")])
+        return (3, h.get("deviceCount", 0) * -1, 0, 0)
 
     structured_hosts.sort(key=sort_key)
-
     now_ts = int(time.time())
-    
-    # 5. Diff against previous state for new device notifications
+
+    # 6. Diff & Notifications
     prev_state = load_previous_state()
     prev_macs = set(prev_state.get("knownMacs", []))
     current_macs = set(d["mac"] for d in device_list if d["mac"] and not d["mac"].startswith("unknown-"))
     new_macs = current_macs - prev_macs if prev_macs else set()
 
-    # Emit notification if new MACs appeared and we were already initialized
     if prev_macs and new_macs:
         for host in structured_hosts:
             if not host.get("isRepeater") and host.get("mac") in new_macs:
-                send_notification(f"New Device: {host['ip']}", f"Vendor: {host['vendor']} · {host['guessedType']}")
+                send_notification(f"New Device: {host['friendlyName']} ({host['ip']})", f"Type: {host['guessedType']} · Vendor: {host['vendor']}")
             elif host.get("isRepeater") and host.get("mac") in new_macs:
                 send_notification(f"New Repeater Detected ({host['mac']})", f"{host['deviceCount']} devices connected")
 
     doc = {
         "updatedAt": now_ts,
         "subnet": subnet,
+        "localIp": local_ip,
         "gatewayIp": gateway_ip,
         "gatewayOnline": True,
         "totalHosts": len(device_list),
         "distinctHostsCount": total_distinct_hosts,
         "repeaterDevicesCount": total_downstream_hosts,
         "repeatersCount": repeaters_count,
+        "securityWarningsCount": total_security_warnings,
         "hasCapError": has_cap_error,
         "hosts": structured_hosts,
         "knownMacs": list(current_macs.union(prev_macs))
     }
 
     write_atomic(STATE_FILE, doc)
-    print(f"Scan complete: {total_distinct_hosts} distinct hosts, {repeaters_count} repeaters ({total_downstream_hosts} devices) on {subnet}")
+    print(f"Scan complete: {total_distinct_hosts} distinct hosts, {repeaters_count} repeaters ({total_downstream_hosts} devices), {total_security_warnings} security notices.")
     return doc
 
 
@@ -383,7 +551,7 @@ def send_notification(title: str, desc: str):
 
 
 def run_deep_scan(target_ip: str):
-    """Executes single-host nmap -sV -O and returns JSON."""
+    """Executes single-host nmap -sV -O and returns structured JSON."""
     if not re.match(r"^\d+\.\d+\.\d+\.\d+$", target_ip):
         return {"ok": False, "error": "Invalid target IP address"}
 
