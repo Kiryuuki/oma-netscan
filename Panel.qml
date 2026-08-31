@@ -8,8 +8,6 @@ import qs.Ui
 Panel {
   id: root
   moduleName: "kiryuuki.oma-netscan"
-  ipcTarget: "kiryuuki.oma-netscan"
-  manageIpc: false
 
   property var anchorItem: null
   property var hostWidget: null
@@ -127,7 +125,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(560))
-    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight, Style.space(720))
+    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(720))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -172,28 +170,31 @@ Panel {
       }
 
       Flickable {
+        id: scrollArea
         anchors.fill: parent
         contentWidth: mainColumn.width
-        contentHeight: mainColumn.implicitHeight
+        contentHeight: mainColumn.implicitHeight + Style.space(24)
         clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
         Column {
           id: mainColumn
-          width: parent.width
-          spacing: Style.space(12)
-          topPadding: Style.space(14)
-          bottomPadding: Style.space(14)
-          leftPadding: Style.space(16)
-          rightPadding: Style.space(16)
+          width: scrollArea.width
+          spacing: Style.space(10)
+          topPadding: Style.space(12)
+          bottomPadding: Style.space(12)
+          leftPadding: Style.space(14)
+          rightPadding: Style.space(14)
 
           // --- HEADER: TITLE & CONTROLS ---
-          RowLayout {
-            width: parent.width - Style.space(32)
-            spacing: Style.space(8)
+          Item {
+            width: parent.width - Style.space(28)
+            implicitHeight: Style.space(42)
 
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
+            Row {
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(10)
 
               Text {
                 textFormat: Text.PlainText
@@ -201,10 +202,13 @@ Panel {
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.title
                 color: Color.accent
+                anchors.verticalCenter: parent.verticalCenter
               }
 
-              ColumnLayout {
-                spacing: 0
+              Column {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
+
                 Text {
                   textFormat: Text.PlainText
                   text: "LOCAL NETWORK RECON"
@@ -225,13 +229,15 @@ Panel {
 
             // Rescan Action Button
             BorderSurface {
-              implicitWidth: Style.space(110)
-              implicitHeight: Style.space(30)
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              implicitWidth: Style.space(114)
+              implicitHeight: Style.space(32)
               radius: Style.cornerRadius
               color: rescanMouse.containsMouse ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.1)
               borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
 
-              RowLayout {
+              Row {
                 anchors.centerIn: parent
                 spacing: Style.space(6)
                 Text {
@@ -263,16 +269,16 @@ Panel {
 
           // --- STATS BAR ---
           BorderSurface {
-            width: parent.width - Style.space(32)
-            implicitHeight: Style.space(32)
+            width: parent.width - Style.space(28)
+            implicitHeight: Style.space(34)
             radius: Style.cornerRadius
             color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.04)
             borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.0), Color.accent)
 
-            RowLayout {
-              anchors.fill: parent
+            Row {
+              anchors.left: parent.left
               anchors.leftMargin: Style.space(12)
-              anchors.rightMargin: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(16)
 
               Text {
@@ -292,89 +298,25 @@ Panel {
                 font.bold: true
                 color: "#f59e0b"
               }
-
-              Item { Layout.fillWidth: true }
-
-              Text {
-                textFormat: Text.PlainText
-                text: root.copyNotice ? root.copyNotice : ("Updated: " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: !!root.copyNotice
-                color: root.copyNotice ? Color.accent : root.contentSubtle
-              }
             }
-          }
 
-          // --- CAP_NET_RAW WARNING (IF PERMISSION MISSING) ---
-          BorderSurface {
-            visible: root.netscanData.hasCapError === true
-            width: parent.width - Style.space(32)
-            implicitHeight: capCol.implicitHeight + Style.space(16)
-            radius: Style.cornerRadius
-            color: Qt.rgba(0.94, 0.27, 0.27, 0.12)
-            borderSpec: Border.controlSpec("focus", "#ef4444", "#ef4444")
-
-            ColumnLayout {
-              id: capCol
-              anchors.fill: parent
-              anchors.margins: Style.space(10)
-              spacing: Style.space(4)
-
-              Text {
-                textFormat: Text.PlainText
-                text: "󰚌 Missing arp-scan raw capability"
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-                color: "#ef4444"
-              }
-              Text {
-                textFormat: Text.PlainText
-                text: "To enable high-speed direct hardware scans, grant raw socket capabilities once:"
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                color: root.contentForeground
-              }
-              Rectangle {
-                Layout.fillWidth: true
-                height: Style.space(26)
-                radius: 4
-                color: "#1e1e2e"
-                RowLayout {
-                  anchors.fill: parent
-                  anchors.leftMargin: 8
-                  anchors.rightMargin: 8
-                  Text {
-                    textFormat: Text.PlainText
-                    text: "sudo setcap cap_net_raw,cap_net_admin+eip $(which arp-scan)"
-                    font.family: "Monospace"
-                    font.pixelSize: 11
-                    color: "#a6adc8"
-                  }
-                  Item { Layout.fillWidth: true }
-                  Text {
-                    textFormat: Text.PlainText
-                    text: "󰆏 Copy"
-                    font.family: root.contentFontFamily
-                    font.pixelSize: 11
-                    font.bold: true
-                    color: Color.accent
-                  }
-                }
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.copyText("sudo setcap cap_net_raw,cap_net_admin+eip $(which arp-scan)", "Command")
-                }
-              }
+            Text {
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.copyNotice ? root.copyNotice : ("Updated: " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: !!root.copyNotice
+              color: root.copyNotice ? Color.accent : root.contentSubtle
             }
           }
 
           // --- DEVICE LIST ---
           Repeater {
             model: root.visibleHosts
-            delegate: ColumnLayout {
+            delegate: Column {
               id: hostDelegate
               required property var modelData
               required property int index
@@ -382,70 +324,82 @@ Panel {
               readonly property bool isRepeater: !!modelData.isRepeater
               readonly property bool isExpanded: isRepeater && !!root.expandedRepeaters[modelData.mac]
 
-              width: mainColumn.width - Style.space(32)
+              width: mainColumn.width - Style.space(28)
               spacing: Style.space(4)
 
               // Main Host or Repeater Header Card
               BorderSurface {
-                Layout.fillWidth: true
-                implicitHeight: hostCol.implicitHeight + Style.space(16)
+                width: parent.width
+                implicitHeight: hostCol.implicitHeight + Style.space(18)
                 radius: Style.cornerRadius
                 color: isSelected
                   ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
                   : (hostMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.06) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.02))
                 borderSpec: Border.controlSpec(isSelected ? "focus" : "normal", isSelected ? Color.accent : Qt.darker(root.contentForeground, 2.5), Color.accent)
 
-                ColumnLayout {
+                Column {
                   id: hostCol
-                  anchors.fill: parent
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
                   anchors.margins: Style.space(10)
                   spacing: Style.space(6)
 
                   // Line 1: Type Icon, IP / Summary, Badges
-                  RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Style.space(8)
+                  Item {
+                    width: parent.width
+                    implicitHeight: Style.space(22)
 
-                    Text {
-                      textFormat: Text.PlainText
-                      text: modelData.typeIcon || "󰖩"
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.title
-                      color: isRepeater ? "#f59e0b" : (modelData.isGateway ? "#3b82f6" : Color.accent)
-                    }
+                    Row {
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(8)
 
-                    Text {
-                      textFormat: Text.PlainText
-                      text: isRepeater ? modelData.summary : (modelData.ip + (modelData.hostname ? " (" + modelData.hostname + ")" : ""))
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.bodySmall
-                      font.bold: true
-                      color: root.contentForeground
-                    }
-
-                    // Role Badge
-                    Rectangle {
-                      height: Style.space(18)
-                      implicitWidth: roleText.implicitWidth + Style.space(10)
-                      radius: 4
-                      color: isRepeater ? Qt.rgba(0.96, 0.62, 0.04, 0.2) : (modelData.isGateway ? Qt.rgba(0.23, 0.51, 0.96, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2))
                       Text {
-                        id: roleText
-                        anchors.centerIn: parent
                         textFormat: Text.PlainText
-                        text: isRepeater ? "COLLAPSED AP" : (modelData.guessedType || "Generic")
+                        text: modelData.typeIcon || "󰖩"
                         font.family: root.contentFontFamily
-                        font.pixelSize: 11
+                        font.pixelSize: Style.font.body
+                        color: isRepeater ? "#f59e0b" : (modelData.isGateway ? "#3b82f6" : Color.accent)
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: isRepeater ? modelData.summary : (modelData.ip + (modelData.hostname ? " (" + modelData.hostname + ")" : ""))
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
                         font.bold: true
-                        color: isRepeater ? "#f59e0b" : (modelData.isGateway ? "#60a5fa" : Color.accent)
+                        color: root.contentForeground
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      // Role Badge
+                      Rectangle {
+                        height: Style.space(18)
+                        implicitWidth: roleText.implicitWidth + Style.space(10)
+                        radius: 4
+                        color: isRepeater ? Qt.rgba(0.96, 0.62, 0.04, 0.2) : (modelData.isGateway ? Qt.rgba(0.23, 0.51, 0.96, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2))
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Text {
+                          id: roleText
+                          anchors.centerIn: parent
+                          textFormat: Text.PlainText
+                          text: isRepeater ? "COLLAPSED AP" : (modelData.guessedType || "Generic")
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 11
+                          font.bold: true
+                          color: isRepeater ? "#f59e0b" : (modelData.isGateway ? "#60a5fa" : Color.accent)
+                        }
                       }
                     }
-
-                    Item { Layout.fillWidth: true }
 
                     // Accordion arrow for Repeater
                     Text {
                       visible: isRepeater
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
                       textFormat: Text.PlainText
                       text: isExpanded ? "󰅃 Collapse (e)" : "󰅀 Expand (e)"
                       font.family: root.contentFontFamily
@@ -456,30 +410,36 @@ Panel {
                   }
 
                   // Line 2: Vendor, MAC, Latency, Open Ports
-                  RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Style.space(12)
+                  Item {
+                    width: parent.width
+                    implicitHeight: Style.space(18)
 
-                    Text {
-                      textFormat: Text.PlainText
-                      text: "MAC: " + (modelData.mac || "N/A")
-                      font.family: "Monospace"
-                      font.pixelSize: 11
-                      color: root.contentSubtle
+                    Row {
+                      anchors.left: parent.left
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: Style.space(14)
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: "MAC: " + (modelData.mac || "N/A")
+                        font.family: "Monospace"
+                        font.pixelSize: 11
+                        color: root.contentSubtle
+                      }
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: "Vendor: " + (modelData.vendor || "Unknown")
+                        font.family: root.contentFontFamily
+                        font.pixelSize: 11
+                        color: root.contentSubtle
+                      }
                     }
-
-                    Text {
-                      textFormat: Text.PlainText
-                      text: "Vendor: " + (modelData.vendor || "Unknown")
-                      font.family: root.contentFontFamily
-                      font.pixelSize: 11
-                      color: root.contentSubtle
-                    }
-
-                    Item { Layout.fillWidth: true }
 
                     // Open Ports tags
                     Row {
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
                       spacing: 4
                       visible: !isRepeater && modelData.openPorts && modelData.openPorts.length > 0
                       Repeater {
@@ -506,15 +466,17 @@ Panel {
                   // Deep scan inline result
                   BorderSurface {
                     visible: !isRepeater && !!root.deepScanResults[modelData.ip]
-                    Layout.fillWidth: true
-                    implicitHeight: deepScanResultCol.implicitHeight + 12
+                    width: parent.width
+                    implicitHeight: deepScanResultCol.implicitHeight + 14
                     radius: 4
                     color: "#181825"
                     borderSpec: Border.controlSpec("normal", "#313244", "#89b4fa")
 
-                    ColumnLayout {
+                    Column {
                       id: deepScanResultCol
-                      anchors.fill: parent
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.top: parent.top
                       anchors.margins: 8
                       spacing: 4
                       Text {
@@ -550,56 +512,64 @@ Panel {
               }
 
               // Collapsible Downstream Devices Grid (for Repeaters)
-              ColumnLayout {
+              Column {
                 visible: isExpanded
-                Layout.fillWidth: true
-                Layout.leftMargin: Style.space(16)
+                width: parent.width
+                leftPadding: Style.space(16)
                 spacing: Style.space(4)
 
                 Repeater {
                   model: modelData.downstreamHosts || []
                   delegate: BorderSurface {
                     required property var modelData
-                    Layout.fillWidth: true
+                    width: parent.width - Style.space(16)
                     implicitHeight: Style.space(32)
                     radius: 4
                     color: downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
                     borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.5), Color.accent)
 
-                    RowLayout {
+                    Item {
                       anchors.fill: parent
                       anchors.leftMargin: Style.space(10)
                       anchors.rightMargin: Style.space(10)
-                      spacing: Style.space(8)
 
-                      Text {
-                        textFormat: Text.PlainText
-                        text: modelData.typeIcon || "󰖩"
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        color: "#f59e0b"
+                      Row {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(8)
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.typeIcon || "󰖩"
+                          font.family: root.contentFontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          color: "#f59e0b"
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.ip
+                          font.family: root.contentFontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                          color: root.contentForeground
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.guessedType || "Generic Device"
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 11
+                          color: root.contentSubtle
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
                       }
 
                       Text {
-                        textFormat: Text.PlainText
-                        text: modelData.ip
-                        font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                        color: root.contentForeground
-                      }
-
-                      Text {
-                        textFormat: Text.PlainText
-                        text: modelData.guessedType || "Generic Device"
-                        font.family: root.contentFontFamily
-                        font.pixelSize: 11
-                        color: root.contentSubtle
-                      }
-
-                      Item { Layout.fillWidth: true }
-
-                      Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
                         textFormat: Text.PlainText
                         text: "󰆏 Copy"
                         font.family: root.contentFontFamily
@@ -624,13 +594,13 @@ Panel {
 
           // --- FOOTER SHORTCUTS ---
           BorderSurface {
-            width: parent.width - Style.space(32)
+            width: parent.width - Style.space(28)
             implicitHeight: Style.space(32)
             radius: Style.cornerRadius
             color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.02)
             borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.0), Color.accent)
 
-            RowLayout {
+            Row {
               anchors.centerIn: parent
               spacing: Style.space(12)
 
