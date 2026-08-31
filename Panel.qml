@@ -255,7 +255,7 @@ Panel {
 
                 Text {
                   textFormat: Text.PlainText
-                  text: "LOCAL NETWORK RECON HOMELAB NETWORK RECON & AUDIT AUDIT"
+                  text: "LOCAL NETWORK RECON & AUDIT"
                   font.family: root.contentFontFamily
                   font.pixelSize: Style.font.body
                   font.bold: true
@@ -287,21 +287,38 @@ Panel {
               }
 
               BorderSurface {
+                id: rescanBtn
                 implicitWidth: Style.space(110)
                 implicitHeight: Style.space(32)
                 radius: Style.cornerRadius
-                color: rescanMouse.containsMouse ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.1)
+                color: rescanMouse.pressed
+                  ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35)
+                  : (rescanMouse.containsMouse || root.isScanning
+                      ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
+                      : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.1))
                 borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
 
                 Row {
                   anchors.centerIn: parent
                   spacing: Style.space(6)
                   Text {
+                    id: rescanIcon
                     textFormat: Text.PlainText
-                    text: root.isScanning ? "󱑞" : "󰑐"
+                    text: "󰑐"
                     font.family: root.contentFontFamily
                     font.pixelSize: Style.font.caption
                     color: Color.accent
+                    rotation: root.isScanning ? spinAnim.angle : 0
+
+                    NumberAnimation on rotation {
+                      id: spinAnim
+                      property real angle: 0
+                      running: root.isScanning
+                      loops: Animation.Infinite
+                      from: 0
+                      to: 360
+                      duration: 900
+                    }
                   }
                   Text {
                     textFormat: Text.PlainText
@@ -318,7 +335,12 @@ Panel {
                   anchors.fill: parent
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.refresh()
+                  onClicked: {
+                    root.isScanning = true
+                    root.copyNotice = "Scanning..."
+                    noticeTimer.restart()
+                    root.refresh()
+                  }
                 }
               }
             }
