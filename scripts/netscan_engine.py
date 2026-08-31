@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-OmaNetscan Discovery, Fingerprinting & Security Engine
-High-performance local network scanner with mDNS, SSH banner OS fingerprinting,
-Proxmox VE & Ubuntu LXC discovery, persistent fingerprint cache, top-level host promotion,
-and category tagging (Green / Orange / Red).
+OmaNetscan Homelab Discovery, Fingerprinting & Security Audit Engine
+High-performance local network scanner tailored for homelab builders:
+mDNS resolution, SSH OS banners, Proxmox VE, Dokploy, KASM, Media & IoT fingerprinting,
+vulnerability auditing, explicit category rationales (Green/Orange/Red), and atomic state storage.
 """
 
 import argparse
@@ -23,13 +23,14 @@ STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "netscan"
 STATE_FILE = STATE_DIR / "devices.json"
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 OUI_FILE = PLUGIN_DIR / "data" / "oui.json"
-MAX_STATE_BYTES = 3 * 1024 * 1024  # 3 MB
+MAX_STATE_BYTES = 4 * 1024 * 1024  # 4 MB
 
+# Comprehensive homelab service and exposure port list
 PROBE_PORTS = [
     21,    # FTP (Insecure plaintext auth)
     22,    # SSH
     23,    # Telnet (Critical insecure plaintext)
-    53,    # DNS
+    53,    # DNS (Pi-hole / AdGuard)
     80,    # HTTP
     139,   # NetBIOS
     443,   # HTTPS
@@ -37,24 +38,28 @@ PROBE_PORTS = [
     554,   # RTSP Video Stream
     1883,  # MQTT Broker
     2375,  # Docker Daemon (Insecure unauthenticated API)
-    3000,  # Dokploy / Node / Gitea / Grafana
-    3001,  # Uptime Kuma / Node App
+    3000,  # Dokploy / Gitea / Grafana
+    3001,  # Uptime Kuma
     3128,  # Proxmox / Squid Proxy
     3306,  # MySQL
     3389,  # RDP Remote Desktop
     5000,  # Docker Registry / Synology DSM
+    5055,  # Overseerr Media Requests
     5173,  # Vite Dev Server
     5432,  # PostgreSQL
     6379,  # Redis
+    7878,  # Radarr Movie Automation
     8000,  # DVR / Hikvision Web Admin / Dev
     8006,  # Proxmox VE Web GUI
     8080,  # HTTP Alt / Proxy / Traefik
     8096,  # Jellyfin Media Server
     8123,  # Home Assistant
     8443,  # HTTPS Alt / UniFi
+    8989,  # Sonarr TV Automation
     9000,  # Portainer / MinIO
     9443,  # Portainer HTTPS
     27017, # MongoDB
+    37575, # Homarr Dashboard
 ]
 
 PORT_NAMES = {
@@ -75,18 +80,22 @@ PORT_NAMES = {
     3306: "MySQL (3306)",
     3389: "RDP (3389)",
     5000: "API/DSM (5000)",
+    5055: "Overseerr (5055)",
     5173: "Vite (5173)",
     5432: "Postgres (5432)",
     6379: "Redis (6379)",
+    7878: "Radarr (7878)",
     8000: "Admin (8000)",
     8006: "Proxmox (8006)",
     8080: "HTTP (8080)",
     8096: "Jellyfin (8096)",
     8123: "Home Assistant (8123)",
     8443: "HTTPS (8443)",
+    8989: "Sonarr (8989)",
     9000: "Portainer (9000)",
     9443: "Portainer (9443)",
-    27017: "MongoDB (27017)"
+    27017: "MongoDB (27017)",
+    37575: "Homarr (37575)"
 }
 
 
@@ -234,7 +243,7 @@ def discover_mdns_devices():
 
 
 def probe_single_host(ip: str):
-    """Probes open ports and grabs SSH banner sequentially per host with robust socket timeout."""
+    """Probes open ports and grabs SSH banner sequentially per host."""
     open_ports = []
     latencies = []
     ssh_banner = ""
@@ -282,11 +291,18 @@ def probe_single_host(ip: str):
     }
 
 
-def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdns_entry: dict, local_ip: str, gateway_ip: str, ssh_banner: str = "", is_repeater: bool = False):
-    """Evaluates device role, OS fingerprint (Ubuntu/Debian/PVE), open ports, security warnings, and category tag."""
+def audit_host_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdns_entry: dict, local_ip: str, gateway_ip: str, ssh_banner: str = "", is_repeater: bool = False):
+    """
+    Evaluates role, OS, homelab apps, security vulnerabilities, category, and an explicit rationale.
+    Categories:
+      - 'green'  : Verified Active & Secure Services
+      - 'orange' : Attention Needed (Unencrypted HTTP, open SMB/RTSP, unfingerprinted idle clients)
+      - 'red'    : Critical Security Vulnerabilities (Telnet, unauthenticated Docker daemon, plaintext FTP)
+    """
     warnings = []
     risk_level = "clean"
     category = "green"
+    category_reason = "Verified healthy homelab node"
 
     p_set = set(open_ports)
     v_lower = vendor.lower()
@@ -294,113 +310,177 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
     m_type = mdns_entry.get("deviceType", "").lower()
     banner_lower = ssh_banner.lower()
 
-    # 1. Security Exposure & Vulnerability Checks
+    # --- 1. VULNERABILITY AUDIT ---
     if 23 in p_set:
-        warnings.append({"severity": "critical", "port": 23, "text": "Telnet Exposed (Insecure Plaintext)"})
+        warnings.append({
+            "severity": "critical",
+            "port": 23,
+            "title": "Telnet Exposed (Insecure Plaintext)",
+            "text": "Port 23 transmits logins in plaintext. Migrate to SSH (Port 22)."
+        })
         risk_level = "critical"
         category = "red"
+        category_reason = "Critical Vulnerability: Unencrypted Telnet service active"
+
     if 2375 in p_set:
-        warnings.append({"severity": "critical", "port": 2375, "text": "Docker Daemon API Unprotected"})
+        warnings.append({
+            "severity": "critical",
+            "port": 2375,
+            "title": "Unauthenticated Docker API Exposed",
+            "text": "Port 2375 allows root container execution without auth. Enable TLS/mTLS on 2376."
+        })
         risk_level = "critical"
         category = "red"
+        category_reason = "Critical Vulnerability: Unprotected Docker daemon API exposed"
+
     if 21 in p_set:
-        warnings.append({"severity": "warning", "port": 21, "text": "FTP Server (Plaintext Authentication)"})
+        warnings.append({
+            "severity": "warning",
+            "port": 21,
+            "title": "Plaintext FTP Server",
+            "text": "Port 21 transmits passwords unencrypted. Migrate to SFTP (Port 22)."
+        })
         if risk_level != "critical":
             risk_level = "warning"
         if category != "red":
             category = "red"
+            category_reason = "Security Risk: Unencrypted FTP service active"
+
     if 3389 in p_set:
-        warnings.append({"severity": "warning", "port": 3389, "text": "RDP Remote Desktop Exposed"})
+        warnings.append({
+            "severity": "warning",
+            "port": 3389,
+            "title": "RDP Remote Desktop Exposed",
+            "text": "Port 3389 is directly exposed to the LAN. Require VPN or KASM/Guacamole gateway."
+        })
         if risk_level != "critical":
             risk_level = "warning"
         if category != "red":
-            category = "red"
+            category = "orange"
+            category_reason = "Attention: RDP Remote Desktop exposed on local subnet"
+
     if 445 in p_set or 139 in p_set:
-        warnings.append({"severity": "info", "port": 445, "text": "SMB / NetBIOS File Sharing Active"})
+        warnings.append({
+            "severity": "info",
+            "port": 445,
+            "title": "SMB / NetBIOS File Sharing Active",
+            "text": "Port 445 SMB active. Verify guest access is disabled and SMBv1 is disabled."
+        })
         if risk_level == "clean":
             risk_level = "info"
         if category == "green":
             category = "orange"
+            category_reason = "Attention: Windows/Samba file sharing active on LAN"
+
     if 554 in p_set:
-        warnings.append({"severity": "info", "port": 554, "text": "RTSP Media Stream Active"})
+        warnings.append({
+            "severity": "info",
+            "port": 554,
+            "title": "RTSP Media Stream Active",
+            "text": "Port 554 RTSP camera stream active. Ensure strong stream credentials."
+        })
         if risk_level == "clean":
             risk_level = "info"
+
     if 80 in p_set and 443 not in p_set and ip != gateway_ip:
-        warnings.append({"severity": "info", "port": 80, "text": "Unencrypted HTTP Interface"})
+        warnings.append({
+            "severity": "info",
+            "port": 80,
+            "title": "Unencrypted HTTP Admin Interface",
+            "text": "Port 80 active without HTTPS. Session tokens are transmitted without TLS."
+        })
+        if category == "green" and 22 not in p_set:
+            category = "orange"
+            category_reason = "Attention: Web interface running over unencrypted HTTP (Port 80)"
 
-    # 2. Device Role & OS Identification
+    # --- 2. HOMELAB ROLE & OS IDENTIFICATION ---
     if ip == local_ip:
-        return "This Machine (Host)", "󰌢", m_name or "Linux Workstation (yuuki)", warnings, risk_level, "green"
-    if is_repeater:
-        return "Repeater / AP Bridge", "󰀝", "Wi-Fi Client Bridge / Repeater", warnings, risk_level, "orange"
-    if ip == gateway_ip:
-        return "Gateway / Router", "󰖟", f"{vendor} Gateway", warnings, risk_level, "green"
+        return "This Machine (Host)", "󰌢", m_name or "Linux Workstation (yuuki)", warnings, risk_level, "green", "Active Linux Workstation (Antigravity & Omarchy Host)"
 
-    # Specific Proxmox VE Nodes (Ports 8006, 3128, or Proxmox nodes)
+    if is_repeater:
+        return "Repeater / AP Bridge", "󰀝", "Wi-Fi Client Bridge / Repeater", warnings, risk_level, "orange", "Proxy-ARP Wi-Fi repeater bridge collapsing downstream MACs"
+
+    if ip == gateway_ip:
+        return "Gateway / Router", "󰖟", f"{vendor} Gateway", warnings, risk_level, "green", "Default subnet gateway & DNS resolver"
+
+    # Specific Proxmox VE Nodes (Ports 8006, 3128, or Corosync)
     if 8006 in p_set or 3128 in p_set:
-        return "Proxmox VE Node", "󰒋", m_name or "Proxmox VE Node", warnings, risk_level, "green"
+        return "Proxmox VE Node", "󰒋", m_name or "Proxmox VE Node", warnings, risk_level, "green", "Proxmox VE Hypervisor Node with SSL Web GUI & cluster proxy"
 
     # Specific Dokploy & App Containers (e.g. .60, .9, .11, .97)
     if 3000 in p_set and (80 in p_set or 8080 in p_set or 8096 in p_set or 22 in p_set):
-        return "Dokploy / Container Host", "󰒋", m_name or "Dokploy Container Host", warnings, risk_level, "green"
+        return "Dokploy / Container Host", "󰒋", m_name or "Dokploy Container Host", warnings, risk_level, "green", "Dokploy PaaS & container hosting platform with web apps"
 
     # KASM Workspaces Host (.108)
     if ip == "192.168.100.108" or (443 in p_set and "ubuntu" in banner_lower):
-        return "KASM Workspaces / App Host", "󰒋", m_name or "KASM Workspaces Host", warnings, risk_level, "green"
+        return "KASM Workspaces / App Host", "󰒋", m_name or "KASM Workspaces Host", warnings, risk_level, "green", "KASM Workspaces streaming isolated browser & desktop instances"
 
     # Jellyfin Media Server
     if 8096 in p_set or 8097 in p_set:
-        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Media Server", warnings, risk_level, "green"
+        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Media Server", warnings, risk_level, "green", "Jellyfin Media Streaming & transcode server"
+
+    # Uptime Kuma
+    if 3001 in p_set:
+        return "Uptime Kuma Monitor", "󰒋", m_name or "Uptime Kuma Monitoring", warnings, risk_level, "green", "Uptime Kuma service health & status page"
+
+    # Media Automation (Overseerr, Radarr, Sonarr)
+    if 5055 in p_set:
+        return "Overseerr Media Manager", "󰒋", m_name or "Overseerr Media Requests", warnings, risk_level, "green", "Overseerr media discovery & automated request pipeline"
+    if 7878 in p_set:
+        return "Radarr Movie Automation", "󰒋", m_name or "Radarr Movie Manager", warnings, risk_level, "green", "Radarr automated movie library manager"
+    if 8989 in p_set:
+        return "Sonarr TV Automation", "󰒋", m_name or "Sonarr TV Manager", warnings, risk_level, "green", "Sonarr automated TV series library manager"
+    if 37575 in p_set:
+        return "Homarr Dashboard", "󰒋", m_name or "Homarr Homelab Dashboard", warnings, risk_level, "green", "Homarr customizable homelab service dashboard"
 
     # Portainer / Docker Management
     if 9000 in p_set or 9443 in p_set:
-        return "Portainer Docker Host", "󰒋", m_name or "Portainer Docker Host", warnings, risk_level, "green"
+        return "Portainer Docker Host", "󰒋", m_name or "Portainer Docker Host", warnings, risk_level, "green", "Portainer container management server"
 
     # Home Assistant
     if 8123 in p_set or "home assistant" in v_lower:
-        return "Home Assistant Hub", "󰒋", m_name or "Home Assistant Hub", warnings, risk_level, "green"
+        return "Home Assistant Hub", "󰒋", m_name or "Home Assistant Hub", warnings, risk_level, "green", "Home Assistant IoT automation & smart home hub"
 
     # IP Cameras
     if 554 in p_set or (8000 in p_set and 80 in p_set) or "hikvision" in v_lower or "dahua" in v_lower:
-        return "IP Camera / NVR", "󰄹", m_name or f"{vendor} Security Camera", warnings, risk_level, "green"
+        return "IP Camera / NVR", "󰄹", m_name or f"{vendor} Security Camera", warnings, risk_level, "green", "Network security camera / video stream endpoint"
 
     # DNS / Pi-hole
     if 53 in p_set:
-        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Block Server", warnings, risk_level, "green"
+        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Block Server", warnings, risk_level, "green", "DNS resolution & network-wide ad-blocking server"
 
     # SSH Banner-Based OS Detection
     if "ubuntu" in banner_lower:
-        return "Ubuntu Linux Host / LXC", "󰕈", m_name or "Ubuntu Linux Host", warnings, risk_level, "green"
+        return "Ubuntu Linux Host / LXC", "󰕈", m_name or "Ubuntu Linux Host", warnings, risk_level, "green", "Ubuntu Linux node running OpenSSH daemon"
 
     if "debian" in banner_lower:
-        return "Debian Linux Node / LXC", "󰣚", m_name or "Debian Linux LXC", warnings, risk_level, "green"
+        return "Debian Linux Node / LXC", "󰣚", m_name or "Debian Linux LXC", warnings, risk_level, "green", "Debian Linux container/host running OpenSSH daemon"
 
     # Web & Development Servers
-    if 3000 in p_set or 3001 in p_set or 5000 in p_set or 5173 in p_set:
-        return "Web App / Dev Server", "󰒋", m_name or "Web Application Server", warnings, risk_level, "green"
+    if 3000 in p_set or 5000 in p_set or 5173 in p_set:
+        return "Web App / Dev Server", "󰒋", m_name or "Web Application Server", warnings, risk_level, "green", "Custom web application / development server"
     if 22 in p_set and (80 in p_set or 443 in p_set):
-        return "Linux Web Server", "󰒋", m_name or "Linux Web Server", warnings, risk_level, "green"
+        return "Linux Web Server", "󰒋", m_name or "Linux Web Server", warnings, risk_level, "green", "Linux server hosting web interfaces & remote SSH"
     if 22 in p_set:
-        return "Linux Host (SSH)", "󰒋", m_name or "Linux Host (SSH)", warnings, risk_level, "green"
-    if 445 in p_set or 139 in p_set:
-        return "Windows / Samba Host", "󰍹", m_name or "Samba / Windows Host", warnings, risk_level, "green"
+        return "Linux Host (SSH)", "󰒋", m_name or "Linux Host (SSH)", warnings, risk_level, "green", "Linux server reachable via SSH"
 
     # mDNS Device Detection
     if m_type == "phone" or "galaxy" in m_name.lower() or "iphone" in m_name.lower() or "pixel" in m_name.lower() or "android" in m_name.lower():
-        return "Mobile Phone", "󰄜", m_name or "Smartphone", warnings, risk_level, "green"
+        return "Mobile Phone", "󰄜", m_name or "Smartphone", warnings, risk_level, "green", "Mobile smartphone connected to Wi-Fi"
     if "tv" in m_name.lower() or "chromecast" in m_name.lower() or "fire" in m_name.lower():
-        return "Smart TV / Media Player", "󰵪", m_name or "Smart TV", warnings, risk_level, "green"
+        return "Smart TV / Media Player", "󰵪", m_name or "Smart TV", warnings, risk_level, "green", "Smart TV / streaming media player"
     if "printer" in m_name.lower() or "canon" in m_name.lower() or "epson" in m_name.lower() or "brother" in m_name.lower():
-        return "Network Printer", "󰐪", m_name or "Network Printer", warnings, risk_level, "green"
+        return "Network Printer", "󰐪", m_name or "Network Printer", warnings, risk_level, "green", "Network printer active on LAN"
 
     if "apple" in v_lower:
-        return "Apple Device", "󰀵", m_name or "Apple Device", warnings, risk_level, "green"
+        return "Apple Device", "󰀵", m_name or "Apple Device", warnings, risk_level, "green", "Apple workstation / mobile device"
     if "samsung" in v_lower or "xiaomi" in v_lower or "google" in v_lower:
-        return "Mobile / Smart Device", "󰄜", m_name or f"{vendor} Device", warnings, risk_level, "green"
+        return "Mobile / Smart Device", "󰄜", m_name or f"{vendor} Device", warnings, risk_level, "green", "Smart IoT / mobile device"
     if "raspberry" in v_lower or "espressif" in v_lower or "tuya" in v_lower:
-        return "IoT / Microcontroller", "󰘚", m_name or f"{vendor} IoT Appliance", warnings, risk_level, "green"
+        return "IoT / Microcontroller", "󰘚", m_name or f"{vendor} IoT Appliance", warnings, risk_level, "green", "Embedded microcontroller / smart home peripheral"
 
-    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Device"), warnings, risk_level, ("orange" if not open_ports else "green")
+    # Unfingerprinted / Idle host
+    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Device"), warnings, risk_level, ("orange" if not open_ports else "green"), ("Idle client with no common service ports listening" if not open_ports else "Generic host with active ports")
 
 
 def perform_network_scan():
@@ -466,7 +546,6 @@ def perform_network_scan():
             ip = future_map[future]
             try:
                 res = future.result()
-                # If cached fingerprint exists and newly probed ports missed something due to transient latency, merge
                 prev_fp = cached_fingerprints.get(ip)
                 if prev_fp:
                     if not res.get("openPorts") and prev_fp.get("openPorts"):
@@ -516,11 +595,10 @@ def perform_network_scan():
                 ip = item["ip"]
                 pr = probe_results.get(ip, {})
                 mdns_entry = mdns_info.get(ip, {})
-                g_type, g_icon, friendly_label, warnings, risk, cat = analyze_security_and_fingerprint(
+                g_type, g_icon, friendly_label, warnings, risk, cat, cat_reason = audit_host_security_and_fingerprint(
                     ip, vendor, pr.get("openPorts", []), mdns_entry, local_ip, gateway_ip, pr.get("sshBanner", ""), is_repeater=False
                 )
 
-                # Cache verified fingerprint
                 if pr.get("openPorts") or g_type != "Generic Host":
                     new_cached_fingerprints[ip] = {
                         "openPorts": pr.get("openPorts", []),
@@ -556,11 +634,12 @@ def perform_network_scan():
                     "warnings": warnings,
                     "riskLevel": risk,
                     "category": cat,
+                    "categoryReason": cat_reason,
                     "isSelf": ip == local_ip,
                     "isGateway": ip == gateway_ip
                 }
 
-                # PROMOTION: If this host is an identified node/server/app (has open ports or non-generic role), promote to top-level host card!
+                # PROMOTION: If this host is an identified node/server/app, promote to top-level host card!
                 if (pr.get("openPorts") and len(pr.get("openPorts")) > 0) or g_type != "Generic Host":
                     structured_hosts.append(host_obj)
                     total_distinct_hosts += 1
@@ -578,14 +657,15 @@ def perform_network_scan():
                     "summary": f"Behind Repeater / AP ({len(idle_downstream)} idle devices)",
                     "downstreamHosts": idle_downstream,
                     "typeIcon": "󰀝",
-                    "category": repeater_cat
+                    "category": repeater_cat,
+                    "categoryReason": f"Proxy-ARP Wi-Fi bridge collapsing {len(idle_downstream)} idle devices under single MAC"
                 })
         else:
             for item in items:
                 ip = item["ip"]
                 pr = probe_results.get(ip, {})
                 mdns_entry = mdns_info.get(ip, {})
-                g_type, g_icon, friendly_label, warnings, risk, cat = analyze_security_and_fingerprint(
+                g_type, g_icon, friendly_label, warnings, risk, cat, cat_reason = audit_host_security_and_fingerprint(
                     ip, vendor, pr.get("openPorts", []), mdns_entry, local_ip, gateway_ip, pr.get("sshBanner", ""), is_repeater=False
                 )
 
@@ -623,6 +703,7 @@ def perform_network_scan():
                     "warnings": warnings,
                     "riskLevel": risk,
                     "category": cat,
+                    "categoryReason": cat_reason,
                     "isSelf": ip == local_ip,
                     "isGateway": ip == gateway_ip
                 })

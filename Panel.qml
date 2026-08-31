@@ -152,8 +152,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(620))
-    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(740))
+    contentWidth: panel.fittedContentWidth(Style.space(640))
+    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(760))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -218,7 +218,7 @@ Panel {
           leftPadding: Style.space(14)
           rightPadding: Style.space(14)
 
-          // --- HEADER: TITLE & CONTROLS ---
+          // --- HEADER: TITLE & RESCAN ---
           Item {
             width: parent.width - Style.space(28)
             implicitHeight: Style.space(42)
@@ -243,7 +243,7 @@ Panel {
 
                 Text {
                   textFormat: Text.PlainText
-                  text: "LOCAL NETWORK RECON"
+                  text: "HOMELAB NETWORK RECON & AUDIT"
                   font.family: root.contentFontFamily
                   font.pixelSize: Style.font.body
                   font.bold: true
@@ -309,7 +309,7 @@ Panel {
               id: tabAll
               readonly property bool isSelected: root.activeTab === "all"
               width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(30)
+              implicitHeight: Style.space(32)
               radius: Style.cornerRadius
               color: tabAll.isSelected ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
               borderSpec: Border.controlSpec("normal", tabAll.isSelected ? Color.accent : Qt.darker(root.contentForeground, 3.5), Color.accent)
@@ -328,7 +328,7 @@ Panel {
               id: tabGreen
               readonly property bool isSelected: root.activeTab === "green"
               width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(30)
+              implicitHeight: Style.space(32)
               radius: Style.cornerRadius
               color: tabGreen.isSelected ? Qt.rgba(0.06, 0.72, 0.51, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
               borderSpec: Border.controlSpec("normal", tabGreen.isSelected ? "#10b981" : Qt.darker(root.contentForeground, 3.5), "#10b981")
@@ -342,12 +342,12 @@ Panel {
               MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "green"; root.selectedIndex = 0 } }
             }
 
-            // Tab 3: Orange (AP & Idle)
+            // Tab 3: Orange (Attention / AP)
             BorderSurface {
               id: tabOrange
               readonly property bool isSelected: root.activeTab === "orange"
               width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(30)
+              implicitHeight: Style.space(32)
               radius: Style.cornerRadius
               color: tabOrange.isSelected ? Qt.rgba(0.96, 0.62, 0.04, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
               borderSpec: Border.controlSpec("normal", tabOrange.isSelected ? "#f59e0b" : Qt.darker(root.contentForeground, 3.5), "#f59e0b")
@@ -356,17 +356,17 @@ Panel {
                 anchors.centerIn: parent
                 spacing: Style.space(4)
                 Text { textFormat: Text.PlainText; text: "󰀝"; font.pixelSize: Style.font.caption; color: "#f59e0b" }
-                Text { textFormat: Text.PlainText; text: "AP/Idle (" + (root.netscanData.orangeCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabOrange.isSelected; color: tabOrange.isSelected ? "#f59e0b" : root.contentForeground }
+                Text { textFormat: Text.PlainText; text: "Attention (" + (root.netscanData.orangeCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabOrange.isSelected; color: tabOrange.isSelected ? "#f59e0b" : root.contentForeground }
               }
               MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "orange"; root.selectedIndex = 0 } }
             }
 
-            // Tab 4: Red (Security Alerts)
+            // Tab 4: Red (Security Notices)
             BorderSurface {
               id: tabRed
               readonly property bool isSelected: root.activeTab === "red"
               width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(30)
+              implicitHeight: Style.space(32)
               radius: Style.cornerRadius
               color: tabRed.isSelected ? Qt.rgba(0.94, 0.27, 0.27, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
               borderSpec: Border.controlSpec("normal", tabRed.isSelected ? "#ef4444" : Qt.darker(root.contentForeground, 3.5), "#ef4444")
@@ -375,9 +375,58 @@ Panel {
                 anchors.centerIn: parent
                 spacing: Style.space(4)
                 Text { textFormat: Text.PlainText; text: "󰚌"; font.pixelSize: Style.font.caption; color: "#ef4444" }
-                Text { textFormat: Text.PlainText; text: "Notices (" + (root.netscanData.securityWarningsCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabRed.isSelected; color: tabRed.isSelected ? "#ef4444" : root.contentForeground }
+                Text { textFormat: Text.PlainText; text: "Risks (" + (root.netscanData.securityWarningsCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabRed.isSelected; color: tabRed.isSelected ? "#ef4444" : root.contentForeground }
               }
               MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "red"; root.selectedIndex = 0 } }
+            }
+          }
+
+          // --- HOMELAB CATEGORY AUDIT BANNER ---
+          BorderSurface {
+            width: parent.width - Style.space(28)
+            implicitHeight: Style.space(30)
+            radius: Style.cornerRadius
+            color: root.activeTab === "red"
+              ? Qt.rgba(0.94, 0.27, 0.27, 0.1)
+              : (root.activeTab === "orange"
+                  ? Qt.rgba(0.96, 0.62, 0.04, 0.1)
+                  : (root.activeTab === "green" ? Qt.rgba(0.06, 0.72, 0.51, 0.1) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.04)))
+            borderSpec: Border.controlSpec("normal",
+              root.activeTab === "red" ? "#ef4444" : (root.activeTab === "orange" ? "#f59e0b" : (root.activeTab === "green" ? "#10b981" : Qt.darker(root.contentForeground, 3.0))),
+              Color.accent
+            )
+
+            Row {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(8)
+
+              Text {
+                textFormat: Text.PlainText
+                text: root.activeTab === "red"
+                  ? "󰚌 Critical Security Risks (Plaintext logins / Unauthenticated APIs)"
+                  : (root.activeTab === "orange"
+                      ? "󰀝 Attention Needed (Unencrypted HTTP, open SMB/RTSP, or idle unfingerprinted clients)"
+                      : (root.activeTab === "green"
+                          ? "󰄲 Verified Homelab Services (Proxmox VE, Dokploy, KASM, Ubuntu LXCs, DNS, SSH, HTTPS)"
+                          : "󰛳 Subnet Reconnaissance (" + (root.netscanData.totalHosts || 0) + " total devices detected)"))
+                font.family: root.contentFontFamily
+                font.pixelSize: 11
+                font.bold: true
+                color: root.activeTab === "red" ? "#ef4444" : (root.activeTab === "orange" ? "#f59e0b" : (root.activeTab === "green" ? "#10b981" : root.contentForeground))
+              }
+            }
+
+            Text {
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: root.copyNotice ? root.copyNotice : ("Updated " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
+              font.family: root.contentFontFamily
+              font.pixelSize: 11
+              color: root.copyNotice ? Color.accent : root.contentSubtle
             }
           }
 
@@ -513,7 +562,45 @@ Panel {
                     }
                   }
 
-                  // Line 2: Vendor, MAC, Latency (Strict separation from ports)
+                  // Line 2: Category Audit & Rationale Explanation
+                  Row {
+                    spacing: 6
+                    Rectangle {
+                      height: 18
+                      implicitWidth: catReasonText.implicitWidth + 10
+                      radius: 3
+                      color: modelData.category === "red"
+                        ? Qt.rgba(0.94, 0.27, 0.27, 0.15)
+                        : (modelData.category === "orange"
+                            ? Qt.rgba(0.96, 0.62, 0.04, 0.15)
+                            : Qt.rgba(0.06, 0.72, 0.51, 0.12))
+                      border.color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                      border.width: 1
+
+                      Row {
+                        anchors.centerIn: parent
+                        spacing: 4
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.category === "red" ? "󰚌" : (modelData.category === "orange" ? "󰀝" : "󰄲")
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 10
+                          color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                        }
+                        Text {
+                          id: catReasonText
+                          textFormat: Text.PlainText
+                          text: modelData.categoryReason || "Active Node"
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 10
+                          font.bold: true
+                          color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                        }
+                      }
+                    }
+                  }
+
+                  // Line 3: Vendor, MAC, Latency
                   Item {
                     width: parent.width
                     implicitHeight: Style.space(16)
@@ -550,7 +637,7 @@ Panel {
                     }
                   }
 
-                  // Line 3: Dedicated Open Ports Badges Row (Zero overlap)
+                  // Line 4: Dedicated Open Ports Badges Row
                   Row {
                     visible: !isRepeater && modelData.portLabels && modelData.portLabels.length > 0
                     spacing: 4
@@ -582,42 +669,63 @@ Panel {
                     }
                   }
 
-                  // Security Warnings Row (if any active vulnerabilities / exposures)
-                  Row {
+                  // Security Warnings Row with Detailed Recommendation
+                  Column {
                     visible: !isRepeater && modelData.warnings && modelData.warnings.length > 0
-                    spacing: 6
+                    width: parent.width
+                    spacing: 4
                     Repeater {
                       model: modelData.warnings || []
-                      delegate: Rectangle {
-                        height: 18
-                        implicitWidth: warnText.implicitWidth + 12
-                        radius: 3
+                      delegate: BorderSurface {
+                        width: parent.width
+                        implicitHeight: warnCol.implicitHeight + 10
+                        radius: 4
                         color: modelData.severity === "critical"
-                          ? Qt.rgba(0.94, 0.27, 0.27, 0.15)
+                          ? Qt.rgba(0.94, 0.27, 0.27, 0.12)
                           : (modelData.severity === "warning"
-                              ? Qt.rgba(0.96, 0.62, 0.04, 0.15)
-                              : Qt.rgba(0.23, 0.51, 0.96, 0.15))
-                        border.color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#3b82f6")
-                        border.width: 1
+                              ? Qt.rgba(0.96, 0.62, 0.04, 0.12)
+                              : Qt.rgba(0.23, 0.51, 0.96, 0.12))
+                        borderSpec: Border.controlSpec("normal",
+                          modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#3b82f6"),
+                          Color.accent
+                        )
 
-                        Row {
-                          anchors.centerIn: parent
-                          spacing: 4
-                          Text {
-                            textFormat: Text.PlainText
-                            text: modelData.severity === "critical" ? "󰚌" : (modelData.severity === "warning" ? "󰌵" : "󰋼")
-                            font.family: root.contentFontFamily
-                            font.pixelSize: 10
-                            color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#3b82f6")
+                        Column {
+                          id: warnCol
+                          anchors.left: parent.left
+                          anchors.right: parent.right
+                          anchors.top: parent.top
+                          anchors.margins: 6
+                          spacing: 2
+
+                          Row {
+                            spacing: 6
+                            Text {
+                              textFormat: Text.PlainText
+                              text: modelData.severity === "critical" ? "󰚌" : (modelData.severity === "warning" ? "󰌵" : "󰋼")
+                              font.family: root.contentFontFamily
+                              font.pixelSize: 11
+                              color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#3b82f6")
+                            }
+                            Text {
+                              textFormat: Text.PlainText
+                              text: modelData.title || modelData.text
+                              font.family: root.contentFontFamily
+                              font.pixelSize: 11
+                              font.bold: true
+                              color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#60a5fa")
+                            }
                           }
+
                           Text {
-                            id: warnText
+                            visible: !!modelData.text && modelData.text !== modelData.title
                             textFormat: Text.PlainText
                             text: modelData.text
                             font.family: root.contentFontFamily
                             font.pixelSize: 10
-                            font.bold: true
-                            color: modelData.severity === "critical" ? "#ef4444" : (modelData.severity === "warning" ? "#f59e0b" : "#60a5fa")
+                            color: root.contentForeground
+                            wrapMode: Text.WordWrap
+                            width: parent.width - 12
                           }
                         }
                       }
@@ -736,7 +844,7 @@ Panel {
 
                         Text {
                           textFormat: Text.PlainText
-                          text: modelData.guessedType || "Idle Client"
+                          text: modelData.categoryReason || "Idle Client"
                           font.family: root.contentFontFamily
                           font.pixelSize: 10
                           color: root.contentSubtle
