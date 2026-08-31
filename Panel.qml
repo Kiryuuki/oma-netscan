@@ -381,10 +381,10 @@ Panel {
             }
           }
 
-          // --- HOMELAB CATEGORY AUDIT BANNER ---
+          // --- BOUNDED HOMELAB CATEGORY AUDIT BANNER (ZERO OVERLAP) ---
           BorderSurface {
             width: parent.width - Style.space(28)
-            implicitHeight: Style.space(30)
+            implicitHeight: Style.space(32)
             radius: Style.cornerRadius
             color: root.activeTab === "red"
               ? Qt.rgba(0.94, 0.27, 0.27, 0.1)
@@ -396,37 +396,42 @@ Panel {
               Color.accent
             )
 
-            Row {
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(8)
+            Item {
+              anchors.fill: parent
 
               Text {
+                id: bannerText
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(12)
+                anchors.right: updatedNoticeText.left
+                anchors.rightMargin: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
+                elide: Text.ElideRight
                 text: root.activeTab === "red"
                   ? "󰚌 Critical Security Risks (Plaintext logins / Unauthenticated APIs)"
                   : (root.activeTab === "orange"
-                      ? "󰀝 Attention Needed (Unencrypted HTTP, open SMB/RTSP, or idle unfingerprinted clients)"
+                      ? "󰀝 Attention Needed (Unencrypted HTTP, open SMB/RTSP, or idle clients)"
                       : (root.activeTab === "green"
-                          ? "󰄲 Verified Homelab Services (Proxmox VE, Dokploy, KASM, Ubuntu LXCs, DNS, SSH, HTTPS)"
+                          ? "󰄲 Verified Homelab Services (Proxmox VE, Dokploy, KASM, Ubuntu LXCs, DNS, SSH)"
                           : "󰛳 Subnet Reconnaissance (" + (root.netscanData.totalHosts || 0) + " total devices detected)"))
                 font.family: root.contentFontFamily
                 font.pixelSize: 11
                 font.bold: true
                 color: root.activeTab === "red" ? "#ef4444" : (root.activeTab === "orange" ? "#f59e0b" : (root.activeTab === "green" ? "#10b981" : root.contentForeground))
               }
-            }
 
-            Text {
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: root.copyNotice ? root.copyNotice : ("Updated " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
-              font.family: root.contentFontFamily
-              font.pixelSize: 11
-              color: root.copyNotice ? Color.accent : root.contentSubtle
+              Text {
+                id: updatedNoticeText
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.copyNotice ? root.copyNotice : ("Updated " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
+                font.family: root.contentFontFamily
+                font.pixelSize: 11
+                color: root.copyNotice ? Color.accent : root.contentSubtle
+              }
             }
           }
 
@@ -473,6 +478,8 @@ Panel {
 
                     Row {
                       anchors.left: parent.left
+                      anchors.right: actionText.left
+                      anchors.rightMargin: Style.space(8)
                       anchors.verticalCenter: parent.verticalCenter
                       spacing: Style.space(8)
 
@@ -496,6 +503,7 @@ Panel {
                         font.bold: true
                         color: root.contentForeground
                         anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
                       }
 
                       // Secondary IP display if friendly name exists and is distinct from IP
@@ -538,64 +546,60 @@ Panel {
 
                     // Accordion arrow for Repeater / Copy for host
                     Text {
-                      visible: isRepeater
+                      id: actionText
                       anchors.right: parent.right
                       anchors.verticalCenter: parent.verticalCenter
                       textFormat: Text.PlainText
-                      text: isExpanded ? "󰅃 Collapse (e)" : "󰅀 Expand (e)"
-                      font.family: root.contentFontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                      color: "#f59e0b"
-                    }
-
-                    Text {
-                      visible: !isRepeater
-                      anchors.right: parent.right
-                      anchors.verticalCenter: parent.verticalCenter
-                      textFormat: Text.PlainText
-                      text: "󰆏 Copy"
+                      text: isRepeater ? (isExpanded ? "󰅃 Collapse (e)" : "󰅀 Expand (e)") : "󰆏 Copy"
                       font.family: root.contentFontFamily
                       font.pixelSize: 11
                       font.bold: true
-                      color: Color.accent
+                      color: isRepeater ? "#f59e0b" : Color.accent
                     }
                   }
 
-                  // Line 2: Category Audit & Rationale Explanation
-                  Row {
-                    spacing: 6
-                    Rectangle {
-                      height: 18
-                      implicitWidth: catReasonText.implicitWidth + 10
-                      radius: 3
-                      color: modelData.category === "red"
-                        ? Qt.rgba(0.94, 0.27, 0.27, 0.15)
-                        : (modelData.category === "orange"
-                            ? Qt.rgba(0.96, 0.62, 0.04, 0.15)
-                            : Qt.rgba(0.06, 0.72, 0.51, 0.12))
-                      border.color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
-                      border.width: 1
+                  // Line 2: Category Audit & Rationale Explanation (Bounded)
+                  BorderSurface {
+                    width: Math.min(parent.width, catReasonRow.implicitWidth + Style.space(16))
+                    implicitHeight: Style.space(22)
+                    radius: 3
+                    color: modelData.category === "red"
+                      ? Qt.rgba(0.94, 0.27, 0.27, 0.15)
+                      : (modelData.category === "orange"
+                          ? Qt.rgba(0.96, 0.62, 0.04, 0.15)
+                          : Qt.rgba(0.06, 0.72, 0.51, 0.12))
+                    borderSpec: Border.controlSpec("normal",
+                      modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981"),
+                      Color.accent
+                    )
 
-                      Row {
-                        anchors.centerIn: parent
-                        spacing: 4
-                        Text {
-                          textFormat: Text.PlainText
-                          text: modelData.category === "red" ? "󰚌" : (modelData.category === "orange" ? "󰀝" : "󰄲")
-                          font.family: root.contentFontFamily
-                          font.pixelSize: 10
-                          color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
-                        }
-                        Text {
-                          id: catReasonText
-                          textFormat: Text.PlainText
-                          text: modelData.categoryReason || "Active Node"
-                          font.family: root.contentFontFamily
-                          font.pixelSize: 10
-                          font.bold: true
-                          color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
-                        }
+                    Row {
+                      id: catReasonRow
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(6)
+                      anchors.rightMargin: Style.space(6)
+                      spacing: Style.space(4)
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: modelData.category === "red" ? "󰚌" : (modelData.category === "orange" ? "󰀝" : "󰄲")
+                        font.family: root.contentFontFamily
+                        font.pixelSize: 10
+                        color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      Text {
+                        id: catReasonText
+                        textFormat: Text.PlainText
+                        text: modelData.categoryReason || "Active Homelab Node"
+                        font.family: root.contentFontFamily
+                        font.pixelSize: 10
+                        font.bold: true
+                        color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        width: Math.min(hostCol.width - Style.space(36), catReasonText.implicitWidth)
                       }
                     }
                   }
@@ -810,6 +814,8 @@ Panel {
 
                       Row {
                         anchors.left: parent.left
+                        anchors.right: downActionText.left
+                        anchors.rightMargin: Style.space(8)
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Style.space(8)
 
@@ -830,6 +836,7 @@ Panel {
                           font.bold: true
                           color: root.contentForeground
                           anchors.verticalCenter: parent.verticalCenter
+                          elide: Text.ElideRight
                         }
 
                         Text {
@@ -849,10 +856,12 @@ Panel {
                           font.pixelSize: 10
                           color: root.contentSubtle
                           anchors.verticalCenter: parent.verticalCenter
+                          elide: Text.ElideRight
                         }
                       }
 
                       Text {
+                        id: downActionText
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         textFormat: Text.PlainText

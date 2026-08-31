@@ -20,6 +20,10 @@ BarWidget {
     distinctHostsCount: 0,
     repeaterDevicesCount: 0,
     repeatersCount: 0,
+    securityWarningsCount: 0,
+    greenCount: 0,
+    orangeCount: 0,
+    redCount: 0,
     hasCapError: false,
     hosts: []
   })
@@ -56,7 +60,7 @@ BarWidget {
     if (panelLoader.item && panelLoader.item.close) panelLoader.item.close()
   }
 
-  implicitWidth: button.implicitWidth
+  implicitWidth: button.slotSize + Style.space(6)
   implicitHeight: button.implicitHeight
 
   onBarChanged: injectPanel()
@@ -88,11 +92,24 @@ BarWidget {
     }
   }
 
-  // Auto-scan once on startup if state file is missing or older than 10 mins
-  Component.onCompleted: {
-    if (!root.netscanState.updatedAt || (Date.now() / 1000 - root.netscanState.updatedAt) > 600) {
-      root.refresh()
+  Timer {
+    id: initialScanTimer
+    interval: 800
+    running: true
+    repeat: false
+    onTriggered: {
+      if (!root.netscanState || !root.netscanState.updatedAt) {
+        root.refresh()
+      }
     }
+  }
+
+  Timer {
+    id: autoScanTimer
+    interval: 300000 // 5 minutes
+    running: true
+    repeat: true
+    onTriggered: root.refresh()
   }
 
   Loader {
@@ -117,18 +134,54 @@ BarWidget {
 
   BarIconButton {
     id: button
-    anchors.fill: parent
     bar: root.bar
-    text: root.isScanning ? "󱑞" : "󰛳 " + (root.netscanState.distinctHostsCount || root.netscanState.totalHosts || "·")
+    slotSize: Style.space(48)
+    opticalSize: Style.space(42)
     foreground: root.opened
       ? Color.accent
       : (root.netscanState.hasCapError
           ? "#ef4444"
-          : (root.bar ? root.bar.barForeground : Color.foreground))
-    slotSize: Style.bar.statusSlot
+          : (root.netscanState.securityWarningsCount > 0
+              ? "#ef4444"
+              : (root.bar ? root.bar.barForeground : Color.foreground)))
+
+    iconComponent: Component {
+      Row {
+        anchors.centerIn: parent
+        spacing: Style.space(4)
+
+        Text {
+          textFormat: Text.PlainText
+          text: root.isScanning ? "󱑞" : "󰛳"
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+          color: root.opened
+            ? Color.accent
+            : (root.netscanState.hasCapError
+                ? "#ef4444"
+                : (root.bar ? root.bar.barForeground : Color.foreground))
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          text: String(root.netscanState.distinctHostsCount || root.netscanState.totalHosts || "·")
+          font.family: "Monospace"
+          font.pixelSize: 11
+          font.bold: true
+          color: root.opened
+            ? Color.accent
+            : (root.netscanState.hasCapError
+                ? "#ef4444"
+                : (root.bar ? root.bar.barForeground : Color.foreground))
+          anchors.verticalCenter: parent.verticalCenter
+        }
+      }
+    }
+
     tooltipText: root.netscanState.hasCapError
       ? "OmaNetscan: Missing cap_net_raw permission"
-      : ("OmaNetscan: " + root.netscanState.distinctHostsCount + " hosts (" + root.netscanState.repeaterDevicesCount + " behind AP) on " + root.netscanState.subnet)
+      : ("OmaNetscan: " + (root.netscanState.distinctHostsCount || 0) + " active homelab nodes (" + (root.netscanState.repeaterDevicesCount || 0) + " idle devices behind AP) on " + (root.netscanState.subnet || "LAN"))
 
     onPressed: function(b) {
       if (!root.bar) return
