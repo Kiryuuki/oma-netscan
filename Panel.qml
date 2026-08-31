@@ -28,11 +28,15 @@ Panel {
     repeaterDevicesCount: 0,
     repeatersCount: 0,
     securityWarningsCount: 0,
+    greenCount: 0,
+    orangeCount: 0,
+    redCount: 0,
     hasCapError: false,
     hosts: []
   })
 
   property bool isScanning: hostWidget ? hostWidget.isScanning : false
+  property string activeTab: "all" // "all", "green", "orange", "red"
   property int selectedIndex: 0
   property var expandedRepeaters: ({})
   property var deepScanResults: ({})
@@ -110,7 +114,29 @@ Panel {
     root.expandedRepeaters = updated
   }
 
-  readonly property var visibleHosts: root.netscanData && root.netscanData.hosts ? root.netscanData.hosts : []
+  readonly property var visibleHosts: {
+    var list = root.netscanData && root.netscanData.hosts ? root.netscanData.hosts : []
+    if (root.activeTab === "all") return list
+    if (root.activeTab === "green") {
+      return list.filter(function(h) {
+        if (h.isRepeater) return (h.downstreamHosts || []).some(function(d) { return d.category === "green" })
+        return h.category === "green"
+      })
+    }
+    if (root.activeTab === "orange") {
+      return list.filter(function(h) {
+        if (h.isRepeater) return true
+        return h.category === "orange"
+      })
+    }
+    if (root.activeTab === "red") {
+      return list.filter(function(h) {
+        if (h.isRepeater) return (h.downstreamHosts || []).some(function(d) { return d.category === "red" })
+        return h.category === "red" || (h.warnings && h.warnings.length > 0)
+      })
+    }
+    return list
+  }
 
   function getSelectedHost() {
     if (visibleHosts && visibleHosts[root.selectedIndex]) {
@@ -155,6 +181,10 @@ Panel {
       }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
+        else if (t === "1") { root.activeTab = "all"; root.selectedIndex = 0 }
+        else if (t === "2") { root.activeTab = "green"; root.selectedIndex = 0 }
+        else if (t === "3") { root.activeTab = "orange"; root.selectedIndex = 0 }
+        else if (t === "4") { root.activeTab = "red"; root.selectedIndex = 0 }
         else if (t === "d" || t === "D") {
           var h = root.getSelectedHost()
           if (h && !h.isRepeater && h.ip) root.triggerDeepScan(h.ip)
@@ -269,59 +299,85 @@ Panel {
             }
           }
 
-          // --- STATS & SECURITY BAR ---
-          BorderSurface {
+          // --- CATEGORY TABS (ALL / GREEN / ORANGE / RED) ---
+          Row {
             width: parent.width - Style.space(28)
-            implicitHeight: Style.space(34)
-            radius: Style.cornerRadius
-            color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.04)
-            borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.0), Color.accent)
+            spacing: Style.space(6)
 
-            Row {
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(14)
+            // Tab 1: All
+            BorderSurface {
+              id: tabAll
+              readonly property bool isSelected: root.activeTab === "all"
+              width: (parent.width - Style.space(18)) / 4
+              implicitHeight: Style.space(30)
+              radius: Style.cornerRadius
+              color: tabAll.isSelected ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
+              borderSpec: Border.controlSpec("normal", tabAll.isSelected ? Color.accent : Qt.darker(root.contentForeground, 3.5), Color.accent)
 
-              Text {
-                textFormat: Text.PlainText
-                text: "󰄲 " + (root.netscanData.distinctHostsCount || 0) + " Hosts"
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                color: "#10b981"
+              Row {
+                anchors.centerIn: parent
+                spacing: Style.space(4)
+                Text { textFormat: Text.PlainText; text: "󰒋"; font.pixelSize: Style.font.caption; color: tabAll.isSelected ? Color.accent : root.contentSubtle }
+                Text { textFormat: Text.PlainText; text: "All (" + (root.netscanData.totalHosts || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabAll.isSelected; color: tabAll.isSelected ? Color.accent : root.contentForeground }
               }
-
-              Text {
-                textFormat: Text.PlainText
-                text: "󰀝 " + (root.netscanData.repeatersCount || 0) + " AP (" + (root.netscanData.repeaterDevicesCount || 0) + " Devices)"
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                color: "#f59e0b"
-              }
-
-              Text {
-                visible: root.netscanData.securityWarningsCount > 0
-                textFormat: Text.PlainText
-                text: "󰚌 " + root.netscanData.securityWarningsCount + " Security Notices"
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                color: "#ef4444"
-              }
+              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "all"; root.selectedIndex = 0 } }
             }
 
-            Text {
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(12)
-              anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: root.copyNotice ? root.copyNotice : ("Updated: " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: !!root.copyNotice
-              color: root.copyNotice ? Color.accent : root.contentSubtle
+            // Tab 2: Green (Verified / Active)
+            BorderSurface {
+              id: tabGreen
+              readonly property bool isSelected: root.activeTab === "green"
+              width: (parent.width - Style.space(18)) / 4
+              implicitHeight: Style.space(30)
+              radius: Style.cornerRadius
+              color: tabGreen.isSelected ? Qt.rgba(0.06, 0.72, 0.51, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
+              borderSpec: Border.controlSpec("normal", tabGreen.isSelected ? "#10b981" : Qt.darker(root.contentForeground, 3.5), "#10b981")
+
+              Row {
+                anchors.centerIn: parent
+                spacing: Style.space(4)
+                Text { textFormat: Text.PlainText; text: "󰄲"; font.pixelSize: Style.font.caption; color: "#10b981" }
+                Text { textFormat: Text.PlainText; text: "Active (" + (root.netscanData.greenCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabGreen.isSelected; color: tabGreen.isSelected ? "#10b981" : root.contentForeground }
+              }
+              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "green"; root.selectedIndex = 0 } }
+            }
+
+            // Tab 3: Orange (AP & Idle)
+            BorderSurface {
+              id: tabOrange
+              readonly property bool isSelected: root.activeTab === "orange"
+              width: (parent.width - Style.space(18)) / 4
+              implicitHeight: Style.space(30)
+              radius: Style.cornerRadius
+              color: tabOrange.isSelected ? Qt.rgba(0.96, 0.62, 0.04, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
+              borderSpec: Border.controlSpec("normal", tabOrange.isSelected ? "#f59e0b" : Qt.darker(root.contentForeground, 3.5), "#f59e0b")
+
+              Row {
+                anchors.centerIn: parent
+                spacing: Style.space(4)
+                Text { textFormat: Text.PlainText; text: "󰀝"; font.pixelSize: Style.font.caption; color: "#f59e0b" }
+                Text { textFormat: Text.PlainText; text: "AP/Idle (" + (root.netscanData.orangeCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabOrange.isSelected; color: tabOrange.isSelected ? "#f59e0b" : root.contentForeground }
+              }
+              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "orange"; root.selectedIndex = 0 } }
+            }
+
+            // Tab 4: Red (Security Alerts)
+            BorderSurface {
+              id: tabRed
+              readonly property bool isSelected: root.activeTab === "red"
+              width: (parent.width - Style.space(18)) / 4
+              implicitHeight: Style.space(30)
+              radius: Style.cornerRadius
+              color: tabRed.isSelected ? Qt.rgba(0.94, 0.27, 0.27, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
+              borderSpec: Border.controlSpec("normal", tabRed.isSelected ? "#ef4444" : Qt.darker(root.contentForeground, 3.5), "#ef4444")
+
+              Row {
+                anchors.centerIn: parent
+                spacing: Style.space(4)
+                Text { textFormat: Text.PlainText; text: "󰚌"; font.pixelSize: Style.font.caption; color: "#ef4444" }
+                Text { textFormat: Text.PlainText; text: "Notices (" + (root.netscanData.securityWarningsCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabRed.isSelected; color: tabRed.isSelected ? "#ef4444" : root.contentForeground }
+              }
+              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "red"; root.selectedIndex = 0 } }
             }
           }
 
@@ -348,8 +404,8 @@ Panel {
                   ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
                   : (hostMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.06) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.02))
                 borderSpec: Border.controlSpec(
-                  modelData.riskLevel === "critical" ? "error" : (isSelected ? "focus" : "normal"),
-                  modelData.riskLevel === "critical" ? "#ef4444" : (isSelected ? Color.accent : Qt.darker(root.contentForeground, 2.5)),
+                  modelData.category === "red" ? "error" : (isSelected ? "focus" : "normal"),
+                  modelData.category === "red" ? "#ef4444" : (modelData.category === "green" ? "#10b981" : (isSelected ? Color.accent : Qt.darker(root.contentForeground, 2.5))),
                   Color.accent
                 )
 
@@ -376,7 +432,7 @@ Panel {
                         text: modelData.typeIcon || "󰖩"
                         font.family: root.contentFontFamily
                         font.pixelSize: Style.font.body
-                        color: isRepeater ? "#f59e0b" : (modelData.isSelf ? "#10b981" : (modelData.isGateway ? "#3b82f6" : Color.accent))
+                        color: isRepeater ? "#f59e0b" : (modelData.isSelf ? "#10b981" : (modelData.isGateway ? "#3b82f6" : (modelData.category === "green" ? "#10b981" : Color.accent)))
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
@@ -415,7 +471,7 @@ Panel {
                               ? Qt.rgba(0.06, 0.72, 0.51, 0.2)
                               : (modelData.isGateway
                                   ? Qt.rgba(0.23, 0.51, 0.96, 0.2)
-                                  : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)))
+                                  : (modelData.category === "green" ? Qt.rgba(0.06, 0.72, 0.51, 0.16) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2))))
                         anchors.verticalCenter: parent.verticalCenter
 
                         Text {
@@ -426,7 +482,7 @@ Panel {
                           font.family: root.contentFontFamily
                           font.pixelSize: 11
                           font.bold: true
-                          color: isRepeater ? "#f59e0b" : (modelData.isSelf ? "#10b981" : (modelData.isGateway ? "#60a5fa" : Color.accent))
+                          color: isRepeater ? "#f59e0b" : (modelData.isSelf ? "#10b981" : (modelData.isGateway ? "#60a5fa" : (modelData.category === "green" ? "#10b981" : Color.accent)))
                         }
                       }
                     }
@@ -614,7 +670,13 @@ Panel {
                 spacing: Style.space(6)
 
                 Repeater {
-                  model: modelData.downstreamHosts || []
+                  model: {
+                    var items = modelData.downstreamHosts || []
+                    if (root.activeTab === "green") return items.filter(function(d) { return d.category === "green" })
+                    if (root.activeTab === "orange") return items.filter(function(d) { return d.category === "orange" })
+                    if (root.activeTab === "red") return items.filter(function(d) { return d.category === "red" })
+                    return items
+                  }
                   delegate: BorderSurface {
                     required property var modelData
                     width: parent.width - Style.space(16)
@@ -623,7 +685,7 @@ Panel {
                     color: (modelData.openPorts && modelData.openPorts.length > 0)
                       ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.08)
                       : (downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03))
-                    borderSpec: Border.controlSpec("normal", (modelData.openPorts && modelData.openPorts.length > 0) ? Color.accent : Qt.darker(root.contentForeground, 3.5), Color.accent)
+                    borderSpec: Border.controlSpec("normal", (modelData.openPorts && modelData.openPorts.length > 0) ? (modelData.category === "green" ? "#10b981" : Color.accent) : Qt.darker(root.contentForeground, 3.5), Color.accent)
 
                     Column {
                       id: downCardCol
@@ -648,7 +710,7 @@ Panel {
                             text: modelData.typeIcon || "󰖩"
                             font.family: root.contentFontFamily
                             font.pixelSize: Style.font.bodySmall
-                            color: (modelData.openPorts && modelData.openPorts.length > 0) ? Color.accent : "#f59e0b"
+                            color: (modelData.category === "green" ? "#10b981" : ((modelData.openPorts && modelData.openPorts.length > 0) ? Color.accent : "#f59e0b"))
                             anchors.verticalCenter: parent.verticalCenter
                           }
 
@@ -672,13 +734,13 @@ Panel {
                             anchors.verticalCenter: parent.verticalCenter
                           }
 
-                          // Role badge for active downstream hosts (e.g. Dokploy)
+                          // Role badge for active downstream hosts (e.g. Dokploy, Proxmox, Ubuntu)
                           Rectangle {
                             visible: modelData.guessedType !== "Generic Host"
                             height: 16
                             implicitWidth: downRoleText.implicitWidth + 8
                             radius: 3
-                            color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
+                            color: modelData.category === "green" ? Qt.rgba(0.06, 0.72, 0.51, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
                             anchors.verticalCenter: parent.verticalCenter
                             Text {
                               id: downRoleText
@@ -688,7 +750,7 @@ Panel {
                               font.family: root.contentFontFamily
                               font.pixelSize: 9
                               font.bold: true
-                              color: Color.accent
+                              color: modelData.category === "green" ? "#10b981" : Color.accent
                             }
                           }
                         }
@@ -772,10 +834,16 @@ Panel {
                 // Shortcut 2
                 Row {
                   spacing: 4
+                  Rectangle { height: 16; width: 22; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "1-4"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Tabs"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
+                }
+                // Shortcut 3
+                Row {
+                  spacing: 4
                   Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "d"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
                   Text { textFormat: Text.PlainText; text: "Deep Scan"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                // Shortcut 3
+                // Shortcut 4
                 Row {
                   spacing: 4
                   Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "c"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
@@ -787,19 +855,19 @@ Panel {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Style.space(12)
 
-                // Shortcut 4
+                // Shortcut 5
                 Row {
                   spacing: 4
                   Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "m"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
                   Text { textFormat: Text.PlainText; text: "Copy MAC"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                // Shortcut 5
+                // Shortcut 6
                 Row {
                   spacing: 4
                   Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "e"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
                   Text { textFormat: Text.PlainText; text: "Toggle AP"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                // Shortcut 6
+                // Shortcut 7
                 Row {
                   spacing: 4
                   Rectangle { height: 16; implicitWidth: 26; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "Esc"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
