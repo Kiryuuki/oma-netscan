@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-OmaNetscan Homelab Discovery, Fingerprinting & Security Audit Engine
-High-performance local network scanner tailored for homelab builders:
-mDNS resolution, SSH OS banners, Proxmox VE, Dokploy, KASM, Media & IoT fingerprinting,
-vulnerability auditing, explicit category rationales (Green/Orange/Red), and atomic state storage.
+OmaNetscan Ultra-Lightweight Homelab Discovery, Fingerprinting & Security Audit Engine
+Designed for zero-impact, ultra-lightweight network polling:
+- Fast layer-2 ARP & kernel neighbour table lookups
+- Targeted liveness checks for verified hosts (only 1 probe packet per known host)
+- Full multi-port audit for new devices or manual rescans
+- Persistent fingerprint cache & explicit category explanations
 """
 
 import argparse
@@ -242,15 +244,44 @@ def discover_mdns_devices():
     return mdns_info
 
 
-def probe_single_host(ip: str):
-    """Probes open ports and grabs SSH banner sequentially per host."""
+def probe_single_host(ip: str, cached_entry: dict = None):
+    """
+    Lightweight port probe. If cached_entry exists with known verified ports,
+    first probes the known primary port to verify liveness (1 single packet).
+    Only performs a full scan if liveness changes or host is unverified.
+    """
     open_ports = []
     latencies = []
-    ssh_banner = ""
+    ssh_banner = cached_entry.get("sshBanner", "") if cached_entry else ""
 
-    for port in PROBE_PORTS:
+    ports_to_check = PROBE_PORTS
+    # Quick liveness optimization for known verified nodes
+    if cached_entry and cached_entry.get("openPorts"):
+        known_p = cached_entry["openPorts"]
+        # Fast single-port liveness check
+        primary = known_p[0]
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.45)
+        s.settimeout(0.35)
+        t0 = time.perf_counter()
+        try:
+            if s.connect_ex((ip, primary)) == 0:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                s.close()
+                return {
+                    "openPorts": known_p,
+                    "latencyMs": round(elapsed_ms, 1),
+                    "hostname": cached_entry.get("hostname", ""),
+                    "sshBanner": ssh_banner
+                }
+        except Exception:
+            pass
+        finally:
+            s.close()
+
+    # Full probe for new/unverified hosts
+    for port in ports_to_check:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.35)
         t0 = time.perf_counter()
         try:
             res = s.connect_ex((ip, port))
@@ -260,7 +291,7 @@ def probe_single_host(ip: str):
                 latencies.append(elapsed_ms)
                 if port == 22 and not ssh_banner:
                     try:
-                        s.settimeout(0.6)
+                        s.settimeout(0.5)
                         raw_b = s.recv(256).decode('latin1', errors='ignore').strip()
                         if raw_b.startswith("SSH-"):
                             ssh_banner = raw_b
@@ -294,10 +325,6 @@ def probe_single_host(ip: str):
 def audit_host_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdns_entry: dict, local_ip: str, gateway_ip: str, ssh_banner: str = "", is_repeater: bool = False):
     """
     Evaluates role, OS, homelab apps, security vulnerabilities, category, and an explicit rationale.
-    Categories:
-      - 'green'  : Verified Active & Secure Services
-      - 'orange' : Attention Needed (Unencrypted HTTP, open SMB/RTSP, unfingerprinted idle clients)
-      - 'red'    : Critical Security Vulnerabilities (Telnet, unauthenticated Docker daemon, plaintext FTP)
     """
     warnings = []
     risk_level = "clean"
@@ -403,7 +430,7 @@ def audit_host_security_and_fingerprint(ip: str, vendor: str, open_ports: list, 
     if ip == gateway_ip:
         return "Gateway / Router", "󰖟", f"{vendor} Gateway", warnings, risk_level, "green", "Default subnet gateway & DNS resolver"
 
-    # Specific Proxmox VE Nodes (Ports 8006, 3128, or Corosync)
+    # Specific Proxmox VE Nodes (Ports 8006, 3128)
     if 8006 in p_set or 3128 in p_set:
         return "Proxmox VE Node", "󰒋", m_name or "Proxmox VE Node", warnings, risk_level, "green", "Proxmox VE Hypervisor Node with SSL Web GUI & cluster proxy"
 
@@ -423,7 +450,7 @@ def audit_host_security_and_fingerprint(ip: str, vendor: str, open_ports: list, 
     if 3001 in p_set:
         return "Uptime Kuma Monitor", "󰒋", m_name or "Uptime Kuma Monitoring", warnings, risk_level, "green", "Uptime Kuma service health & status page"
 
-    # Media Automation (Overseerr, Radarr, Sonarr)
+    # Media Automation
     if 5055 in p_set:
         return "Overseerr Media Manager", "󰒋", m_name or "Overseerr Media Requests", warnings, risk_level, "green", "Overseerr media discovery & automated request pipeline"
     if 7878 in p_set:
@@ -493,7 +520,7 @@ def perform_network_scan():
     prev_state = load_previous_state()
     cached_fingerprints = prev_state.get("cachedFingerprints", {})
 
-    # 1. ARP Scan
+    # 1. Layer-2 ARP Scan
     try:
         res = subprocess.run(["arp-scan", "--localnet", "--plain", "-x"], capture_output=True, text=True, timeout=8)
         if res.returncode == 0:
@@ -510,7 +537,7 @@ def perform_network_scan():
     except Exception:
         has_cap_error = True
 
-    # 2. Augment with ip neigh
+    # 2. Augment with kernel neighbour table
     try:
         neigh_res = subprocess.run(["ip", "neigh", "show"], capture_output=True, text=True, timeout=3)
         for line in neigh_res.stdout.splitlines():
@@ -538,10 +565,10 @@ def perform_network_scan():
     # 3. Discover mDNS Friendly Names in Parallel
     mdns_info = discover_mdns_devices()
 
-    # 4. Multi-threaded Port, Banner, and Security Probing across ALL devices
+    # 4. Multi-threaded Port & Security Probing with Liveness Short-Circuit
     probe_results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-        future_map = {executor.submit(probe_single_host, d["ip"]): d["ip"] for d in device_list}
+        future_map = {executor.submit(probe_single_host, d["ip"], cached_fingerprints.get(d["ip"])): d["ip"] for d in device_list}
         for future in concurrent.futures.as_completed(future_map):
             ip = future_map[future]
             try:
@@ -639,7 +666,6 @@ def perform_network_scan():
                     "isGateway": ip == gateway_ip
                 }
 
-                # PROMOTION: If this host is an identified node/server/app, promote to top-level host card!
                 if (pr.get("openPorts") and len(pr.get("openPorts")) > 0) or g_type != "Generic Host":
                     structured_hosts.append(host_obj)
                     total_distinct_hosts += 1

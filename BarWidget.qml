@@ -60,11 +60,16 @@ BarWidget {
     if (panelLoader.item && panelLoader.item.close) panelLoader.item.close()
   }
 
-  implicitWidth: button.slotSize + Style.space(6)
+  implicitWidth: button.slotSize + Style.space(2)
   implicitHeight: button.implicitHeight
 
   onBarChanged: injectPanel()
-  onSettingsChanged: injectPanel()
+  onSettingsChanged: {
+    injectPanel()
+    if (root.settings && root.settings.refreshIntervalMin) {
+      autoScanTimer.interval = Math.max(1, root.settings.refreshIntervalMin) * 60 * 1000
+    }
+  }
 
   FileView {
     id: stateFile
@@ -94,7 +99,7 @@ BarWidget {
 
   Timer {
     id: initialScanTimer
-    interval: 800
+    interval: 600
     running: true
     repeat: false
     onTriggered: {
@@ -106,8 +111,8 @@ BarWidget {
 
   Timer {
     id: autoScanTimer
-    interval: 300000 // 5 minutes
-    running: true
+    interval: (root.settings && root.settings.refreshIntervalMin ? Math.max(1, root.settings.refreshIntervalMin) : 15) * 60 * 1000
+    running: root.settings && ("autoRefresh" in root.settings) ? root.settings.autoRefresh : true
     repeat: true
     onTriggered: root.refresh()
   }
@@ -135,8 +140,8 @@ BarWidget {
   BarIconButton {
     id: button
     bar: root.bar
-    slotSize: Style.space(48)
-    opticalSize: Style.space(42)
+    slotSize: Style.space(38)
+    opticalSize: Style.space(34)
     foreground: root.opened
       ? Color.accent
       : (root.netscanState.hasCapError
@@ -148,7 +153,7 @@ BarWidget {
     iconComponent: Component {
       Row {
         anchors.centerIn: parent
-        spacing: Style.space(4)
+        spacing: Style.space(3)
 
         Text {
           textFormat: Text.PlainText

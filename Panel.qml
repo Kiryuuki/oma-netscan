@@ -11,6 +11,7 @@ Panel {
 
   property var anchorItem: null
   property var hostWidget: null
+  property var settings: null
   readonly property var barIdentity: hostWidget || root
 
   readonly property color contentForeground: bar ? bar.foreground : Color.foreground
@@ -43,12 +44,23 @@ Panel {
   property string deepScanTargetIp: ""
   property bool isDeepScanning: false
   property string copyNotice: ""
+  property int selectedIntervalMin: (settings && settings.refreshIntervalMin) ? settings.refreshIntervalMin : 15
 
   function open() { root.controller.show() }
   function close() { root.controller.hide() }
   function toggle() { if (root.opened) close(); else open(); }
   function refresh() {
     if (hostWidget && hostWidget.refresh) hostWidget.refresh()
+  }
+
+  function setIntervalMin(m) {
+    root.selectedIntervalMin = m
+    if (root.settings) root.settings.refreshIntervalMin = m
+    if (hostWidget && hostWidget.autoScanTimer) {
+      hostWidget.autoScanTimer.interval = m * 60 * 1000
+    }
+    root.copyNotice = "Refresh set to " + m + "m"
+    noticeTimer.restart()
   }
 
   onOpenedChanged: {
@@ -218,7 +230,7 @@ Panel {
           leftPadding: Style.space(14)
           rightPadding: Style.space(14)
 
-          // --- HEADER: TITLE & RESCAN ---
+          // --- HEADER: TITLE & CONTROLS ---
           Item {
             width: parent.width - Style.space(28)
             implicitHeight: Style.space(42)
@@ -259,43 +271,114 @@ Panel {
               }
             }
 
-            // Rescan Action Button
-            BorderSurface {
+            // Top Right Cluster: "Updated 0m ago" beside [Rescan (r)] Button
+            Row {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              implicitWidth: Style.space(114)
-              implicitHeight: Style.space(32)
-              radius: Style.cornerRadius
-              color: rescanMouse.containsMouse ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.1)
-              borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+              spacing: Style.space(10)
 
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(6)
-                Text {
-                  textFormat: Text.PlainText
-                  text: root.isScanning ? "󱑞" : "󰑐"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.caption
-                  color: Color.accent
-                }
-                Text {
-                  textFormat: Text.PlainText
-                  text: root.isScanning ? "Scanning..." : "Rescan (r)"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  color: Color.accent
-                }
+              Text {
+                textFormat: Text.PlainText
+                text: root.copyNotice ? root.copyNotice : ("Updated " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
+                font.family: root.contentFontFamily
+                font.pixelSize: 11
+                color: root.copyNotice ? Color.accent : root.contentSubtle
+                anchors.verticalCenter: parent.verticalCenter
               }
 
-              MouseArea {
-                id: rescanMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.refresh()
+              BorderSurface {
+                implicitWidth: Style.space(110)
+                implicitHeight: Style.space(32)
+                radius: Style.cornerRadius
+                color: rescanMouse.containsMouse ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.1)
+                borderSpec: Border.controlSpec("normal", Color.accent, Color.accent)
+
+                Row {
+                  anchors.centerIn: parent
+                  spacing: Style.space(6)
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.isScanning ? "󱑞" : "󰑐"
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    color: Color.accent
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    text: root.isScanning ? "Scanning..." : "Rescan (r)"
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    color: Color.accent
+                  }
+                }
+
+                MouseArea {
+                  id: rescanMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.refresh()
+                }
               }
+            }
+          }
+
+          // --- REFRESH RATE CONTROLS ROW (1m, 15m, 60m, Custom) ---
+          Row {
+            width: parent.width - Style.space(28)
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Auto-scan:"
+              font.family: root.contentFontFamily
+              font.pixelSize: 11
+              color: root.contentSubtle
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Repeater {
+              model: [
+                { label: "1m", value: 1 },
+                { label: "5m", value: 5 },
+                { label: "15m", value: 15 },
+                { label: "60m", value: 60 }
+              ]
+              delegate: BorderSurface {
+                required property var modelData
+                readonly property bool isSelected: root.selectedIntervalMin === modelData.value
+                width: Style.space(42)
+                implicitHeight: Style.space(22)
+                radius: 4
+                color: isSelected ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.25) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.04)
+                borderSpec: Border.controlSpec("normal", isSelected ? Color.accent : Qt.darker(root.contentForeground, 3.5), Color.accent)
+
+                Text {
+                  anchors.centerIn: parent
+                  textFormat: Text.PlainText
+                  text: modelData.label
+                  font.family: "Monospace"
+                  font.pixelSize: 10
+                  font.bold: isSelected
+                  color: isSelected ? Color.accent : root.contentSubtle
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.setIntervalMin(modelData.value)
+                }
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "· Lightweight liveness checks (0% CPU / <2KB)"
+              font.family: root.contentFontFamily
+              font.pixelSize: 10
+              color: root.contentSubtle
+              anchors.verticalCenter: parent.verticalCenter
             }
           }
 
@@ -381,10 +464,10 @@ Panel {
             }
           }
 
-          // --- BOUNDED HOMELAB CATEGORY AUDIT BANNER (ZERO OVERLAP) ---
+          // --- MULTI-LINE FULL MESSAGE HOMELAB AUDIT BANNER (ZERO OVERLAP) ---
           BorderSurface {
             width: parent.width - Style.space(28)
-            implicitHeight: Style.space(32)
+            implicitHeight: bannerCol.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
             color: root.activeTab === "red"
               ? Qt.rgba(0.94, 0.27, 0.27, 0.1)
@@ -396,41 +479,53 @@ Panel {
               Color.accent
             )
 
-            Item {
-              anchors.fill: parent
+            Column {
+              id: bannerCol
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(8)
+              spacing: 2
 
-              Text {
-                id: bannerText
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(12)
-                anchors.right: updatedNoticeText.left
-                anchors.rightMargin: Style.space(12)
-                anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                elide: Text.ElideRight
-                text: root.activeTab === "red"
-                  ? "󰚌 Critical Security Risks (Plaintext logins / Unauthenticated APIs)"
-                  : (root.activeTab === "orange"
-                      ? "󰀝 Attention Needed (Unencrypted HTTP, open SMB/RTSP, or idle clients)"
-                      : (root.activeTab === "green"
-                          ? "󰄲 Verified Homelab Services (Proxmox VE, Dokploy, KASM, Ubuntu LXCs, DNS, SSH)"
-                          : "󰛳 Subnet Reconnaissance (" + (root.netscanData.totalHosts || 0) + " total devices detected)"))
-                font.family: root.contentFontFamily
-                font.pixelSize: 11
-                font.bold: true
-                color: root.activeTab === "red" ? "#ef4444" : (root.activeTab === "orange" ? "#f59e0b" : (root.activeTab === "green" ? "#10b981" : root.contentForeground))
+              Row {
+                spacing: Style.space(6)
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.activeTab === "red" ? "󰚌" : (root.activeTab === "orange" ? "󰀝" : (root.activeTab === "green" ? "󰄲" : "󰛳"))
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  color: root.activeTab === "red" ? "#ef4444" : (root.activeTab === "orange" ? "#f59e0b" : (root.activeTab === "green" ? "#10b981" : Color.accent))
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.activeTab === "red"
+                    ? "Critical Security Risks Audit"
+                    : (root.activeTab === "orange"
+                        ? "Attention & Exposure Review"
+                        : (root.activeTab === "green"
+                            ? "Verified Homelab Services & Clusters"
+                            : "Subnet Reconnaissance & Inventory"))
+                  font.family: root.contentFontFamily
+                  font.pixelSize: 11
+                  font.bold: true
+                  color: root.activeTab === "red" ? "#ef4444" : (root.activeTab === "orange" ? "#f59e0b" : (root.activeTab === "green" ? "#10b981" : root.contentForeground))
+                }
               }
 
               Text {
-                id: updatedNoticeText
-                anchors.right: parent.right
-                anchors.rightMargin: Style.space(12)
-                anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
-                text: root.copyNotice ? root.copyNotice : ("Updated " + (root.netscanData.updatedAt ? Math.round((Date.now()/1000 - root.netscanData.updatedAt)/60) + "m ago" : "just now"))
+                text: root.activeTab === "red"
+                  ? "Hosts with insecure remote protocols (Telnet 23, plaintext FTP 21, unauthenticated Docker daemon API 2375). Actionable remediation recommended."
+                  : (root.activeTab === "orange"
+                      ? "Hosts requiring attention: unencrypted HTTP admin interfaces (port 80 without SSL), active SMB/RTSP streams, or idle unfingerprinted clients."
+                      : (root.activeTab === "green"
+                          ? "Healthy homelab infrastructure: Proxmox VE hypervisors, Dokploy container platforms, KASM workspaces, Ubuntu/Debian LXCs, and active DNS resolvers."
+                          : (root.netscanData.totalHosts || 0) + " total devices detected across " + root.netscanData.subnet + ". Click any host to copy IP or press [d] for deep scan."))
                 font.family: root.contentFontFamily
-                font.pixelSize: 11
-                color: root.copyNotice ? Color.accent : root.contentSubtle
+                font.pixelSize: 10
+                color: root.contentSubtle
+                wrapMode: Text.WordWrap
+                width: parent.width
               }
             }
           }
@@ -558,10 +653,10 @@ Panel {
                     }
                   }
 
-                  // Line 2: Category Audit & Rationale Explanation (Bounded)
+                  // Line 2: Category Audit & Rationale Explanation (Full Unclipped Display)
                   BorderSurface {
-                    width: Math.min(parent.width, catReasonRow.implicitWidth + Style.space(16))
-                    implicitHeight: Style.space(22)
+                    width: parent.width
+                    implicitHeight: catReasonCol.implicitHeight + Style.space(8)
                     radius: 3
                     color: modelData.category === "red"
                       ? Qt.rgba(0.94, 0.27, 0.27, 0.15)
@@ -573,33 +668,33 @@ Panel {
                       Color.accent
                     )
 
-                    Row {
-                      id: catReasonRow
-                      anchors.fill: parent
-                      anchors.leftMargin: Style.space(6)
-                      anchors.rightMargin: Style.space(6)
-                      spacing: Style.space(4)
+                    Column {
+                      id: catReasonCol
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.margins: Style.space(4)
+                      spacing: 2
 
-                      Text {
-                        textFormat: Text.PlainText
-                        text: modelData.category === "red" ? "󰚌" : (modelData.category === "orange" ? "󰀝" : "󰄲")
-                        font.family: root.contentFontFamily
-                        font.pixelSize: 10
-                        color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
-                        anchors.verticalCenter: parent.verticalCenter
-                      }
-
-                      Text {
-                        id: catReasonText
-                        textFormat: Text.PlainText
-                        text: modelData.categoryReason || "Active Homelab Node"
-                        font.family: root.contentFontFamily
-                        font.pixelSize: 10
-                        font.bold: true
-                        color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
-                        anchors.verticalCenter: parent.verticalCenter
-                        elide: Text.ElideRight
-                        width: Math.min(hostCol.width - Style.space(36), catReasonText.implicitWidth)
+                      Row {
+                        spacing: Style.space(4)
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.category === "red" ? "󰚌" : (modelData.category === "orange" ? "󰀝" : "󰄲")
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 10
+                          color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                        }
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.categoryReason || "Active Homelab Node"
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 10
+                          font.bold: true
+                          color: modelData.category === "red" ? "#ef4444" : (modelData.category === "orange" ? "#f59e0b" : "#10b981")
+                          wrapMode: Text.WordWrap
+                          width: hostCol.width - Style.space(32)
+                        }
                       }
                     }
                   }

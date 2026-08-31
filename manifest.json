@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Kiryuuki",
   "license": "Source-Available Non-Commercial (PolyForm-Noncommercial-1.0.0)",
-  "description": "Homelab local network discovery and device fingerprinting sidepanel for Omarchy Desktop. Fast ARP discovery, proxy-ARP repeater de-duplication, offline OUI vendor lookup, and on-demand port inspection.",
+  "description": "Homelab local network discovery, service fingerprinting, and security audit sidepanel for Omarchy Desktop. Fast ARP discovery, proxy-ARP repeater de-duplication, offline OUI vendor lookup, and on-demand port inspection.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,9 +14,31 @@
   },
   "barWidget": {
     "displayName": "OmaNetscan",
-    "description": "Network discovery & device fingerprinting sidepanel",
+    "description": "Homelab network discovery, service fingerprinting & security audits",
     "category": "System",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalMin": 15,
+      "autoRefresh": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalMin",
+        "type": "integer",
+        "label": "Auto-refresh Interval (minutes)",
+        "description": "Interval between background network scans (e.g. 1, 15, 60, or custom minutes).",
+        "min": 1,
+        "max": 1440,
+        "step": 1,
+        "defaultValue": 15
+      },
+      {
+        "key": "autoRefresh",
+        "type": "boolean",
+        "label": "Enable periodic background scanning",
+        "defaultValue": true
+      }
+    ]
   }
 }
