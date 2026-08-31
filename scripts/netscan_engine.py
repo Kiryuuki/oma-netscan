@@ -23,9 +23,9 @@ STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "netscan"
 STATE_FILE = STATE_DIR / "devices.json"
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 OUI_FILE = PLUGIN_DIR / "data" / "oui.json"
-MAX_STATE_BYTES = 1024 * 1024  # 1 MB
+MAX_STATE_BYTES = 2 * 1024 * 1024  # 2 MB
 
-# Extended port scanning list including security exposure vectors
+# Expanded port list for homelab LXCs, Docker apps, Dokploy, Proxmox, Media, and Security
 PROBE_PORTS = [
     21,    # FTP (Insecure plaintext auth)
     22,    # SSH
@@ -38,38 +38,54 @@ PROBE_PORTS = [
     554,   # RTSP Video Stream
     1883,  # MQTT Broker
     2375,  # Docker Daemon (Insecure unauthenticated API)
-    3000,  # Dev / Node Web App
+    3000,  # Dokploy / Node / Gitea / Grafana
+    3001,  # Uptime Kuma / Node App
+    3306,  # MySQL
     3389,  # RDP Remote Desktop
     5000,  # Docker Registry / Synology DSM
+    5173,  # Vite Dev Server
+    5432,  # PostgreSQL
+    6379,  # Redis
     8000,  # DVR / Hikvision Web Admin / Dev
     8006,  # Proxmox VE Web GUI
-    8080,  # HTTP Alt / Proxy
+    8080,  # HTTP Alt / Proxy / Traefik
     8096,  # Jellyfin Media Server
     8123,  # Home Assistant
-    9000,  # Portainer
+    8443,  # HTTPS Alt / UniFi
+    9000,  # Portainer / MinIO
+    9443,  # Portainer HTTPS
+    27017, # MongoDB
 ]
 
 PORT_NAMES = {
     21: "FTP (Plaintext)",
-    22: "SSH",
+    22: "SSH (22)",
     23: "Telnet (Insecure)",
-    53: "DNS",
-    80: "HTTP",
+    53: "DNS (53)",
+    80: "HTTP (80)",
     139: "NetBIOS",
-    443: "HTTPS",
-    445: "SMB",
-    554: "RTSP Stream",
-    1883: "MQTT",
-    2375: "Docker API",
-    3000: "App (3000)",
-    3389: "RDP",
+    443: "HTTPS (443)",
+    445: "SMB (445)",
+    554: "RTSP (554)",
+    1883: "MQTT (1883)",
+    2375: "Docker API (2375)",
+    3000: "Dokploy/App (3000)",
+    3001: "Uptime Kuma (3001)",
+    3306: "MySQL (3306)",
+    3389: "RDP (3389)",
     5000: "API/DSM (5000)",
-    8000: "DVR/Admin",
-    8006: "Proxmox VE",
-    8080: "HTTP Alt",
-    8096: "Jellyfin",
-    8123: "Home Assistant",
-    9000: "Portainer"
+    5173: "Vite (5173)",
+    5432: "Postgres (5432)",
+    6379: "Redis (6379)",
+    8000: "Admin (8000)",
+    8006: "Proxmox (8006)",
+    8080: "HTTP (8080)",
+    8096: "Jellyfin (8096)",
+    8123: "Home Assistant (8123)",
+    8443: "HTTPS (8443)",
+    9000: "Portainer (9000)",
+    9443: "Portainer (9443)",
+    27017: "MongoDB (27017)"
 }
 
 
@@ -195,7 +211,6 @@ def discover_mdns_devices():
                         friendly_name = ""
                         device_type = ""
                         
-                        # Extract name and type from TXT records if available
                         m_name = re.search(r'"name=([^"]+)"', txt_records)
                         if m_name:
                             friendly_name = m_name.group(1)
@@ -217,26 +232,40 @@ def discover_mdns_devices():
     return mdns_info
 
 
+def check_port_open(ip: str, port: int):
+    """Probes a single TCP port with robust timeout tolerance for multi-hop Wi-Fi networks."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1.2)
+    t0 = time.perf_counter()
+    try:
+        res = s.connect_ex((ip, port))
+        if res == 0:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            return port, elapsed_ms
+    except Exception:
+        pass
+    finally:
+        s.close()
+    return port, None
+
+
 def probe_single_host(ip: str):
-    """Probes open ports, calculates latency, and collects security banners."""
+    """Probes open ports across all defined service vectors with multi-threading."""
     open_ports = []
     latencies = []
-    
-    for port in PROBE_PORTS:
-        t0 = time.perf_counter()
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.12)
-        try:
-            res = s.connect_ex((ip, port))
-            if res == 0:
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
-                open_ports.append(port)
-                latencies.append(elapsed_ms)
-        except Exception:
-            pass
-        finally:
-            s.close()
 
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(PROBE_PORTS)) as executor:
+        futures = [executor.submit(check_port_open, ip, p) for p in PROBE_PORTS]
+        for f in concurrent.futures.as_completed(futures):
+            try:
+                p, lat = f.result()
+                if lat is not None:
+                    open_ports.append(p)
+                    latencies.append(lat)
+            except Exception:
+                pass
+
+    open_ports.sort()
     avg_latency = round(min(latencies), 1) if latencies else None
 
     # rDNS lookup
@@ -258,7 +287,7 @@ def probe_single_host(ip: str):
 def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdns_entry: dict, local_ip: str, gateway_ip: str, is_repeater: bool = False):
     """Evaluates device role, friendly label, open ports, and security warnings."""
     warnings = []
-    risk_level = "clean"  # "clean", "info", "warning", "critical"
+    risk_level = "clean"
 
     p_set = set(open_ports)
     v_lower = vendor.lower()
@@ -299,6 +328,30 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
     if ip == gateway_ip:
         return "Gateway / Router", "󰖟", f"{vendor} Gateway", warnings, risk_level
 
+    # Check Dokploy / App Container LXCs
+    if 3000 in p_set or (8080 in p_set and (80 in p_set or 8096 in p_set or 22 in p_set)):
+        return "Dokploy / Container Host", "󰒋", m_name or "Dokploy / Container LXC", warnings, risk_level
+    if 8006 in p_set:
+        return "Proxmox VE Node", "󰒋", m_name or "Proxmox Virtualization Hypervisor", warnings, risk_level
+    if 8096 in p_set or 8097 in p_set:
+        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Streaming Server", warnings, risk_level
+    if 9000 in p_set or 9443 in p_set:
+        return "Portainer Docker Host", "󰒋", m_name or "Portainer Management Server", warnings, risk_level
+    if 8123 in p_set or "home assistant" in v_lower:
+        return "Home Assistant Hub", "󰒋", m_name or "Home Assistant Smart Hub", warnings, risk_level
+    if 554 in p_set or 8000 in p_set or "hikvision" in v_lower or "dahua" in v_lower:
+        return "IP Camera / NVR", "󰄹", m_name or f"{vendor} Security Camera", warnings, risk_level
+    if 53 in p_set and (80 in p_set or 443 in p_set):
+        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Blocking Server", warnings, risk_level
+    if 3001 in p_set or 5000 in p_set or 5173 in p_set:
+        return "Web App / Dev Server", "󰒋", m_name or "Web Application Server", warnings, risk_level
+    if 22 in p_set and (80 in p_set or 443 in p_set):
+        return "Linux Web Server", "󰒋", m_name or "Linux Server (SSH+Web)", warnings, risk_level
+    if 22 in p_set:
+        return "Linux Host (SSH)", "󰒋", m_name or "Linux Server (SSH)", warnings, risk_level
+    if 445 in p_set or 139 in p_set:
+        return "Windows / Samba Host", "󰍹", m_name or "Samba / Windows Client", warnings, risk_level
+
     # Check mDNS hints
     if m_type == "phone" or "galaxy" in m_name.lower() or "iphone" in m_name.lower() or "pixel" in m_name.lower() or "android" in m_name.lower():
         return "Mobile Phone", "󰄜", m_name or "Smartphone", warnings, risk_level
@@ -306,34 +359,14 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
         return "Smart TV / Media Player", "󰵪", m_name or "Smart TV", warnings, risk_level
     if "printer" in m_name.lower() or "canon" in m_name.lower() or "epson" in m_name.lower() or "brother" in m_name.lower():
         return "Network Printer", "󰐪", m_name or "Network Printer", warnings, risk_level
-
-    # Check port & vendor signatures
-    if 8006 in p_set:
-        return "Proxmox VE Node", "󰒋", m_name or "Proxmox Virtualization Hypervisor", warnings, risk_level
-    if 8096 in p_set or 8097 in p_set:
-        return "Jellyfin Media Server", "󰎁", m_name or "Jellyfin Streaming Server", warnings, risk_level
-    if 554 in p_set or 8000 in p_set or "hikvision" in v_lower or "dahua" in v_lower:
-        return "IP Camera / NVR", "󰄹", m_name or f"{vendor} Security Camera", warnings, risk_level
-    if 8123 in p_set or "home assistant" in v_lower:
-        return "Home Assistant", "󰒋", m_name or "Home Assistant Hub", warnings, risk_level
-    if 53 in p_set and (80 in p_set or 443 in p_set):
-        return "DNS / Pi-hole Server", "󰒋", m_name or "DNS / Ad-Blocking Server", warnings, risk_level
-    if 3000 in p_set or 8080 in p_set or 9000 in p_set:
-        return "Container / App Host", "󰒋", m_name or "Application / Container Server", warnings, risk_level
-    if 22 in p_set and (80 in p_set or 443 in p_set):
-        return "Linux Web Server", "󰒋", m_name or "Linux Server (SSH+Web)", warnings, risk_level
-    if 22 in p_set:
-        return "Linux Host (SSH)", "󰒋", m_name or "Linux Server (SSH)", warnings, risk_level
-    if 445 in p_set or 139 in p_set:
-        return "Windows / Samba Host", "󰍹", m_name or "Samba / Windows Client", warnings, risk_level
     if "apple" in v_lower:
-        return "Apple Device", "󰀵", m_name or "Apple Workstation / Device", warnings, risk_level
+        return "Apple Device", "󰀵", m_name or "Apple Device", warnings, risk_level
     if "samsung" in v_lower or "xiaomi" in v_lower or "google" in v_lower:
         return "Mobile / Smart Device", "󰄜", m_name or f"{vendor} Smart Device", warnings, risk_level
     if "raspberry" in v_lower or "espressif" in v_lower or "tuya" in v_lower:
         return "IoT / Microcontroller", "󰘚", m_name or f"{vendor} IoT Appliance", warnings, risk_level
 
-    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Device"), warnings, risk_level
+    return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Host"), warnings, risk_level
 
 
 def perform_network_scan():
@@ -388,9 +421,9 @@ def perform_network_scan():
     # 3. Discover mDNS Friendly Names in Parallel
     mdns_info = discover_mdns_devices()
 
-    # 4. Multi-threaded Port and Security Probing
+    # 4. Multi-threaded Port and Security Probing across ALL devices
     probe_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         future_map = {executor.submit(probe_single_host, d["ip"]): d["ip"] for d in device_list}
         for future in concurrent.futures.as_completed(future_map):
             ip = future_map[future]
@@ -448,6 +481,9 @@ def perform_network_scan():
                     "isGateway": ip == gateway_ip
                 })
                 total_downstream_hosts += 1
+
+            # Sort downstream hosts so active services (e.g. Dokploy .60) appear at the top of the repeater list
+            downstream.sort(key=lambda d: len(d["openPorts"]) * -1)
 
             structured_hosts.append({
                 "isRepeater": True,

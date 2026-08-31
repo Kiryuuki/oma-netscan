@@ -126,7 +126,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(580))
+    contentWidth: panel.fittedContentWidth(Style.space(600))
     contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(720))
 
     PanelKeyCatcher {
@@ -304,7 +304,7 @@ Panel {
               Text {
                 visible: root.netscanData.securityWarningsCount > 0
                 textFormat: Text.PlainText
-                text: "󰚌 " + root.netscanData.securityWarningsCount + " Security Alerts"
+                text: "󰚌 " + root.netscanData.securityWarningsCount + " Security Notices"
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -493,9 +493,9 @@ Panel {
                           height: 16
                           implicitWidth: portText.implicitWidth + 8
                           radius: 3
-                          color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1)
+                          color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1 || modelData.indexOf("Docker API") !== -1)
                             ? Qt.rgba(0.94, 0.27, 0.27, 0.2)
-                            : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1
+                            : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1 || modelData.indexOf("RDP") !== -1
                                 ? Qt.rgba(0.96, 0.62, 0.04, 0.2)
                                 : Qt.rgba(0.06, 0.72, 0.51, 0.16))
                           Text {
@@ -505,9 +505,9 @@ Panel {
                             text: String(modelData)
                             font.family: "Monospace"
                             font.pixelSize: 10
-                            color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1)
+                            color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1 || modelData.indexOf("Docker API") !== -1)
                               ? "#ef4444"
-                              : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1
+                              : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1 || modelData.indexOf("RDP") !== -1
                                   ? "#f59e0b"
                                   : "#10b981")
                           }
@@ -611,76 +611,126 @@ Panel {
                 visible: isExpanded
                 width: parent.width
                 leftPadding: Style.space(16)
-                spacing: Style.space(4)
+                spacing: Style.space(6)
 
                 Repeater {
                   model: modelData.downstreamHosts || []
                   delegate: BorderSurface {
                     required property var modelData
                     width: parent.width - Style.space(16)
-                    implicitHeight: Style.space(34)
+                    implicitHeight: downCardCol.implicitHeight + Style.space(16)
                     radius: 4
-                    color: downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
-                    borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.5), Color.accent)
+                    color: (modelData.openPorts && modelData.openPorts.length > 0)
+                      ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.08)
+                      : (downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03))
+                    borderSpec: Border.controlSpec("normal", (modelData.openPorts && modelData.openPorts.length > 0) ? Color.accent : Qt.darker(root.contentForeground, 3.5), Color.accent)
 
-                    Item {
-                      anchors.fill: parent
-                      anchors.leftMargin: Style.space(10)
-                      anchors.rightMargin: Style.space(10)
+                    Column {
+                      id: downCardCol
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.margins: Style.space(8)
+                      spacing: Style.space(4)
 
-                      Row {
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Style.space(8)
+                      // Line 1: Icon, Friendly Name, IP, Role Badge, Copy Action
+                      Item {
+                        width: parent.width
+                        implicitHeight: Style.space(20)
 
-                        Text {
-                          textFormat: Text.PlainText
-                          text: modelData.typeIcon || "󰖩"
-                          font.family: root.contentFontFamily
-                          font.pixelSize: Style.font.bodySmall
-                          color: "#f59e0b"
+                        Row {
+                          anchors.left: parent.left
                           anchors.verticalCenter: parent.verticalCenter
+                          spacing: Style.space(8)
+
+                          Text {
+                            textFormat: Text.PlainText
+                            text: modelData.typeIcon || "󰖩"
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.bodySmall
+                            color: (modelData.openPorts && modelData.openPorts.length > 0) ? Color.accent : "#f59e0b"
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Text {
+                            textFormat: Text.PlainText
+                            text: modelData.friendlyName || modelData.ip
+                            font.family: root.contentFontFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                            color: root.contentForeground
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Text {
+                            visible: !!modelData.friendlyName && modelData.friendlyName !== modelData.ip
+                            textFormat: Text.PlainText
+                            text: "(" + modelData.ip + ")"
+                            font.family: "Monospace"
+                            font.pixelSize: 10
+                            color: root.contentSubtle
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          // Role badge for active downstream hosts (e.g. Dokploy)
+                          Rectangle {
+                            visible: modelData.guessedType !== "Generic Host"
+                            height: 16
+                            implicitWidth: downRoleText.implicitWidth + 8
+                            radius: 3
+                            color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
+                            anchors.verticalCenter: parent.verticalCenter
+                            Text {
+                              id: downRoleText
+                              anchors.centerIn: parent
+                              textFormat: Text.PlainText
+                              text: modelData.guessedType || ""
+                              font.family: root.contentFontFamily
+                              font.pixelSize: 9
+                              font.bold: true
+                              color: Color.accent
+                            }
+                          }
                         }
 
                         Text {
+                          anchors.right: parent.right
+                          anchors.verticalCenter: parent.verticalCenter
                           textFormat: Text.PlainText
-                          text: modelData.friendlyName || modelData.ip
+                          text: "󰆏 Copy"
                           font.family: root.contentFontFamily
-                          font.pixelSize: Style.font.caption
+                          font.pixelSize: 11
                           font.bold: true
-                          color: root.contentForeground
-                          anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        Text {
-                          visible: !!modelData.friendlyName && modelData.friendlyName !== modelData.ip
-                          textFormat: Text.PlainText
-                          text: "(" + modelData.ip + ")"
-                          font.family: "Monospace"
-                          font.pixelSize: 10
-                          color: root.contentSubtle
-                          anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        Text {
-                          textFormat: Text.PlainText
-                          text: modelData.guessedType || "Generic Device"
-                          font.family: root.contentFontFamily
-                          font.pixelSize: 10
-                          color: root.contentSubtle
-                          anchors.verticalCenter: parent.verticalCenter
+                          color: Color.accent
                         }
                       }
 
-                      Text {
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        textFormat: Text.PlainText
-                        text: "󰆏 Copy"
-                        font.family: root.contentFontFamily
-                        font.pixelSize: 11
-                        font.bold: true
-                        color: Color.accent
+                      // Line 2: Open Ports on downstream host (if any)
+                      Row {
+                        visible: modelData.portLabels && modelData.portLabels.length > 0
+                        spacing: 4
+                        Repeater {
+                          model: (modelData.portLabels || []).slice(0, 5)
+                          delegate: Rectangle {
+                            height: 16
+                            implicitWidth: downPortText.implicitWidth + 8
+                            radius: 3
+                            color: (modelData.indexOf("Dokploy") !== -1 || modelData.indexOf("Jellyfin") !== -1 || modelData.indexOf("Proxmox") !== -1)
+                              ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
+                              : Qt.rgba(0.06, 0.72, 0.51, 0.16)
+                            Text {
+                              id: downPortText
+                              anchors.centerIn: parent
+                              textFormat: Text.PlainText
+                              text: String(modelData)
+                              font.family: "Monospace"
+                              font.pixelSize: 9
+                              color: (modelData.indexOf("Dokploy") !== -1 || modelData.indexOf("Jellyfin") !== -1 || modelData.indexOf("Proxmox") !== -1)
+                                ? Color.accent
+                                : "#10b981"
+                            }
+                          }
+                        }
                       }
                     }
 
@@ -697,10 +747,10 @@ Panel {
             }
           }
 
-          // --- FOOTER SHORTCUTS (CLEAN 2-ROW GRID) ---
+          // --- FOOTER SHORTCUTS (CLEAN 2-ROW GRID WITHOUT OVERFLOW) ---
           BorderSurface {
             width: parent.width - Style.space(28)
-            implicitHeight: Style.space(52)
+            implicitHeight: Style.space(56)
             radius: Style.cornerRadius
             color: Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.02)
             borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.0), Color.accent)
@@ -711,55 +761,49 @@ Panel {
 
               Row {
                 anchors.horizontalCenter: parent.horizontalCenter
-                spacing: Style.space(16)
+                spacing: Style.space(12)
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: "<b>[r]</b> Rescan Subnet"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: 11
-                  color: root.contentSubtle
+                // Shortcut 1
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "r"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Rescan"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                Text {
-                  textFormat: Text.PlainText
-                  text: "<b>[d]</b> Deep Port Scan"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: 11
-                  color: root.contentSubtle
+                // Shortcut 2
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "d"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Deep Scan"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                Text {
-                  textFormat: Text.PlainText
-                  text: "<b>[c]</b> Copy IP Address"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: 11
-                  color: root.contentSubtle
+                // Shortcut 3
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "c"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Copy IP"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
               }
 
               Row {
                 anchors.horizontalCenter: parent.horizontalCenter
-                spacing: Style.space(16)
+                spacing: Style.space(12)
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: "<b>[m]</b> Copy MAC Address"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: 11
-                  color: root.contentSubtle
+                // Shortcut 4
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "m"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Copy MAC"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                Text {
-                  textFormat: Text.PlainText
-                  text: "<b>[e]</b> Expand AP List"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: 11
-                  color: root.contentSubtle
+                // Shortcut 5
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "e"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Toggle AP"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
-                Text {
-                  textFormat: Text.PlainText
-                  text: "<b>[Esc]</b> Close"
-                  font.family: root.contentFontFamily
-                  font.pixelSize: 11
-                  color: root.contentSubtle
+                // Shortcut 6
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; implicitWidth: 26; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "Esc"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Close"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
               }
             }
