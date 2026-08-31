@@ -1,0 +1,29 @@
+Source-Available Non-Commercial License (PolyForm Noncommercial 1.0.0)
+
+Copyright (c) 2026 Kiryuuki
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to view,
+copy, modify, merge, publish, distribute, and contribute to the Software for
+non-commercial purposes, subject to the following conditions:
+
+1. Non-Commercial Use: You may use, inspect, test, modify, and distribute this
+   Software freely for personal, educational, and homelab non-commercial use.
+
+2. No Commercial Sale: You may NOT sell, re-license, rent, lease, or charge any
+   fee for the Software, modified versions thereof, or standalone distributions
+   containing the Software, without prior written permission from the author.
+
+3. Attribution: The above copyright notice and this permission notice shall be
+   included in all copies or substantial portions of the Software.
+
+4. Contributions: Contributions, pull requests, bug fixes, and feature additions
+   submitted to this repository are welcomed and licensed under these same terms.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
