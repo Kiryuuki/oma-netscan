@@ -255,7 +255,7 @@ Panel {
 
                 Text {
                   textFormat: Text.PlainText
-                  text: "HOMELAB NETWORK RECON & AUDIT"
+                  text: "LOCAL NETWORK RECON HOMELAB NETWORK RECON & AUDIT AUDIT"
                   font.family: root.contentFontFamily
                   font.pixelSize: Style.font.body
                   font.bold: true
@@ -503,7 +503,7 @@ Panel {
                     : (root.activeTab === "orange"
                         ? "Attention & Exposure Review"
                         : (root.activeTab === "green"
-                            ? "Verified Homelab Services & Clusters"
+                            ? "Verified Network Services Verified Homelab Services & Clusters Hosts"
                             : "Subnet Reconnaissance & Inventory"))
                   font.family: root.contentFontFamily
                   font.pixelSize: 11
@@ -519,7 +519,7 @@ Panel {
                   : (root.activeTab === "orange"
                       ? "Hosts requiring attention: unencrypted HTTP admin interfaces (port 80 without SSL), active SMB/RTSP streams, or idle unfingerprinted clients."
                       : (root.activeTab === "green"
-                          ? "Healthy homelab infrastructure: Proxmox VE hypervisors, Dokploy container platforms, KASM workspaces, Ubuntu/Debian LXCs, and active DNS resolvers."
+                          ? "Healthy network infrastructure: Proxmox VE hypervisors, Dokploy container platforms, KASM workspaces, Ubuntu/Debian LXCs, and active DNS resolvers."
                           : (root.netscanData.totalHosts || 0) + " total devices detected across " + root.netscanData.subnet + ". Click any host to copy IP or press [d] for deep scan."))
                 font.family: root.contentFontFamily
                 font.pixelSize: 10
@@ -687,7 +687,7 @@ Panel {
                         }
                         Text {
                           textFormat: Text.PlainText
-                          text: modelData.categoryReason || "Active Homelab Node"
+                          text: modelData.categoryReason || "Active Network Host"
                           font.family: root.contentFontFamily
                           font.pixelSize: 10
                           font.bold: true

@@ -186,7 +186,7 @@ BarWidget {
 
     tooltipText: root.netscanState.hasCapError
       ? "OmaNetscan: Missing cap_net_raw permission"
-      : ("OmaNetscan: " + (root.netscanState.distinctHostsCount || 0) + " active homelab nodes (" + (root.netscanState.repeaterDevicesCount || 0) + " idle devices behind AP) on " + (root.netscanState.subnet || "LAN"))
+      : ("OmaNetscan: " + (root.netscanState.distinctHostsCount || 0) + " active network hosts (" + (root.netscanState.repeaterDevicesCount || 0) + " idle devices behind AP) on " + (root.netscanState.subnet || "LAN"))
 
     onPressed: function(b) {
       if (!root.bar) return

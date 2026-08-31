@@ -329,7 +329,7 @@ def audit_host_security_and_fingerprint(ip: str, vendor: str, open_ports: list, 
     warnings = []
     risk_level = "clean"
     category = "green"
-    category_reason = "Verified healthy homelab node"
+    category_reason = "Verified healthy network host"
 
     p_set = set(open_ports)
     v_lower = vendor.lower()
