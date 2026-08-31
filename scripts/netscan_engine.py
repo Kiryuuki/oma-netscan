@@ -2,7 +2,7 @@
 """
 OmaNetscan Discovery, Fingerprinting & Security Engine
 High-performance local network scanner with mDNS, SSH banner OS fingerprinting,
-Proxmox VE & Ubuntu LXC discovery, Proxy-ARP repeater de-duplication, port security audits,
+Proxmox VE & Ubuntu LXC discovery, persistent fingerprint cache, top-level host promotion,
 and category tagging (Green / Orange / Red).
 """
 
@@ -23,7 +23,7 @@ STATE_DIR = Path.home() / ".local" / "state" / "omarchy" / "netscan"
 STATE_FILE = STATE_DIR / "devices.json"
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 OUI_FILE = PLUGIN_DIR / "data" / "oui.json"
-MAX_STATE_BYTES = 2 * 1024 * 1024  # 2 MB
+MAX_STATE_BYTES = 3 * 1024 * 1024  # 3 MB
 
 PROBE_PORTS = [
     21,    # FTP (Insecure plaintext auth)
@@ -234,14 +234,14 @@ def discover_mdns_devices():
 
 
 def probe_single_host(ip: str):
-    """Probes open ports and grabs SSH banner sequentially per host."""
+    """Probes open ports and grabs SSH banner sequentially per host with robust socket timeout."""
     open_ports = []
     latencies = []
     ssh_banner = ""
 
     for port in PROBE_PORTS:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.35)
+        s.settimeout(0.45)
         t0 = time.perf_counter()
         try:
             res = s.connect_ex((ip, port))
@@ -251,7 +251,7 @@ def probe_single_host(ip: str):
                 latencies.append(elapsed_ms)
                 if port == 22 and not ssh_banner:
                     try:
-                        s.settimeout(0.5)
+                        s.settimeout(0.6)
                         raw_b = s.recv(256).decode('latin1', errors='ignore').strip()
                         if raw_b.startswith("SSH-"):
                             ssh_banner = raw_b
@@ -404,11 +404,14 @@ def analyze_security_and_fingerprint(ip: str, vendor: str, open_ports: list, mdn
 
 
 def perform_network_scan():
-    """Performs full ARP, mDNS, SSH banner OS discovery, and security port audits."""
+    """Performs full ARP, mDNS, SSH banner OS discovery, persistent cache merge, and security audits."""
     raw_devices = []
     local_ip, subnet = get_local_ip_and_subnet()
     gateway_ip, gateway_iface = get_default_gateway()
     has_cap_error = False
+
+    prev_state = load_previous_state()
+    cached_fingerprints = prev_state.get("cachedFingerprints", {})
 
     # 1. ARP Scan
     try:
@@ -462,9 +465,23 @@ def perform_network_scan():
         for future in concurrent.futures.as_completed(future_map):
             ip = future_map[future]
             try:
-                probe_results[ip] = future.result()
+                res = future.result()
+                # If cached fingerprint exists and newly probed ports missed something due to transient latency, merge
+                prev_fp = cached_fingerprints.get(ip)
+                if prev_fp:
+                    if not res.get("openPorts") and prev_fp.get("openPorts"):
+                        res["openPorts"] = prev_fp["openPorts"]
+                    if not res.get("sshBanner") and prev_fp.get("sshBanner"):
+                        res["sshBanner"] = prev_fp["sshBanner"]
+                probe_results[ip] = res
             except Exception:
-                probe_results[ip] = {"openPorts": [], "latencyMs": None, "hostname": "", "sshBanner": ""}
+                prev_fp = cached_fingerprints.get(ip, {})
+                probe_results[ip] = {
+                    "openPorts": prev_fp.get("openPorts", []),
+                    "latencyMs": None,
+                    "hostname": prev_fp.get("hostname", ""),
+                    "sshBanner": prev_fp.get("sshBanner", "")
+                }
 
     # 5. Group by MAC Address & Classify
     mac_groups = {}
@@ -482,6 +499,7 @@ def perform_network_scan():
     green_count = 0
     orange_count = 0
     red_count = 0
+    new_cached_fingerprints = {}
 
     for mac, items in mac_groups.items():
         is_repeater = len(items) > 2
@@ -491,8 +509,9 @@ def perform_network_scan():
 
         if is_repeater:
             repeaters_count += 1
-            downstream = []
+            idle_downstream = []
             repeater_has_red = False
+
             for item in sorted(items, key=lambda x: [int(p) for p in x["ip"].split(".")]):
                 ip = item["ip"]
                 pr = probe_results.get(ip, {})
@@ -500,6 +519,17 @@ def perform_network_scan():
                 g_type, g_icon, friendly_label, warnings, risk, cat = analyze_security_and_fingerprint(
                     ip, vendor, pr.get("openPorts", []), mdns_entry, local_ip, gateway_ip, pr.get("sshBanner", ""), is_repeater=False
                 )
+
+                # Cache verified fingerprint
+                if pr.get("openPorts") or g_type != "Generic Host":
+                    new_cached_fingerprints[ip] = {
+                        "openPorts": pr.get("openPorts", []),
+                        "guessedType": g_type,
+                        "friendlyName": friendly_label,
+                        "typeIcon": g_icon,
+                        "sshBanner": pr.get("sshBanner", "")
+                    }
+
                 if warnings:
                     total_security_warnings += len(warnings)
                 if cat == "red":
@@ -510,9 +540,11 @@ def perform_network_scan():
                 else:
                     orange_count += 1
 
-                downstream.append({
+                host_obj = {
+                    "isRepeater": False,
                     "ip": ip,
                     "mac": mac,
+                    "vendor": vendor,
                     "hostname": mdns_entry.get("hostname") or pr.get("hostname", ""),
                     "friendlyName": friendly_label,
                     "openPorts": pr.get("openPorts", []),
@@ -526,24 +558,28 @@ def perform_network_scan():
                     "category": cat,
                     "isSelf": ip == local_ip,
                     "isGateway": ip == gateway_ip
+                }
+
+                # PROMOTION: If this host is an identified node/server/app (has open ports or non-generic role), promote to top-level host card!
+                if (pr.get("openPorts") and len(pr.get("openPorts")) > 0) or g_type != "Generic Host":
+                    structured_hosts.append(host_obj)
+                    total_distinct_hosts += 1
+                else:
+                    idle_downstream.append(host_obj)
+                    total_downstream_hosts += 1
+
+            if idle_downstream:
+                repeater_cat = "red" if repeater_has_red else "orange"
+                structured_hosts.append({
+                    "isRepeater": True,
+                    "mac": mac,
+                    "vendor": vendor,
+                    "deviceCount": len(idle_downstream),
+                    "summary": f"Behind Repeater / AP ({len(idle_downstream)} idle devices)",
+                    "downstreamHosts": idle_downstream,
+                    "typeIcon": "󰀝",
+                    "category": repeater_cat
                 })
-                total_downstream_hosts += 1
-
-            # Sort downstream hosts so active services (Proxmox, Dokploy, Ubuntu) appear first
-            downstream.sort(key=lambda d: (len(d["openPorts"]) * -1, 0 if d["guessedType"] != "Generic Host" else 1))
-
-            repeater_cat = "red" if repeater_has_red else "orange"
-
-            structured_hosts.append({
-                "isRepeater": True,
-                "mac": mac,
-                "vendor": vendor,
-                "deviceCount": len(items),
-                "summary": f"Behind Repeater / AP ({len(items)} devices)",
-                "downstreamHosts": downstream,
-                "typeIcon": "󰀝",
-                "category": repeater_cat
-            })
         else:
             for item in items:
                 ip = item["ip"]
@@ -552,6 +588,16 @@ def perform_network_scan():
                 g_type, g_icon, friendly_label, warnings, risk, cat = analyze_security_and_fingerprint(
                     ip, vendor, pr.get("openPorts", []), mdns_entry, local_ip, gateway_ip, pr.get("sshBanner", ""), is_repeater=False
                 )
+
+                if pr.get("openPorts") or g_type != "Generic Host":
+                    new_cached_fingerprints[ip] = {
+                        "openPorts": pr.get("openPorts", []),
+                        "guessedType": g_type,
+                        "friendlyName": friendly_label,
+                        "typeIcon": g_icon,
+                        "sshBanner": pr.get("sshBanner", "")
+                    }
+
                 if warnings:
                     total_security_warnings += len(warnings)
                 if cat == "red":
@@ -582,22 +628,35 @@ def perform_network_scan():
                 })
                 total_distinct_hosts += 1
 
-    # Sort structured hosts: Gateway first, This Machine second, active service hosts, then repeaters
+    # PRIORITY SORTING: Gateway first, This Machine second, Proxmox/Dokploy/Kasm/Ubuntu servers, then idle devices/repeaters
     def sort_key(h):
         if h.get("isGateway"):
             return (0, 0, 0, 0)
         if h.get("isSelf"):
             return (1, 0, 0, 0)
         if not h.get("isRepeater"):
-            has_services = len(h.get("openPorts", [])) > 0 or h.get("guessedType") != "Generic Host"
-            return (2 if has_services else 3, *[int(p) for p in h["ip"].split(".")])
-        return (4, h.get("deviceCount", 0) * -1, 0, 0)
+            gtype = h.get("guessedType", "")
+            if "Proxmox" in gtype:
+                prio = 2
+            elif "Dokploy" in gtype:
+                prio = 3
+            elif "KASM" in gtype or "Jellyfin" in gtype or "Home Assistant" in gtype:
+                prio = 4
+            elif "Ubuntu" in gtype:
+                prio = 5
+            elif "Debian" in gtype:
+                prio = 6
+            elif len(h.get("openPorts", [])) > 0:
+                prio = 7
+            else:
+                prio = 8
+            return (prio, *[int(p) for p in h["ip"].split(".")])
+        return (9, h.get("deviceCount", 0) * -1, 0, 0)
 
     structured_hosts.sort(key=sort_key)
     now_ts = int(time.time())
 
     # 6. Diff & Notifications
-    prev_state = load_previous_state()
     prev_macs = set(prev_state.get("knownMacs", []))
     current_macs = set(d["mac"] for d in device_list if d["mac"] and not d["mac"].startswith("unknown-"))
     new_macs = current_macs - prev_macs if prev_macs else set()
@@ -625,11 +684,12 @@ def perform_network_scan():
         "redCount": red_count,
         "hasCapError": has_cap_error,
         "hosts": structured_hosts,
+        "cachedFingerprints": new_cached_fingerprints,
         "knownMacs": list(current_macs.union(prev_macs))
     }
 
     write_atomic(STATE_FILE, doc)
-    print(f"Scan complete: {total_distinct_hosts} distinct hosts, {repeaters_count} repeaters ({total_downstream_hosts} devices), Green:{green_count} Orange:{orange_count} Red:{red_count}.")
+    print(f"Scan complete: {total_distinct_hosts} distinct/promoted hosts, {repeaters_count} repeaters ({total_downstream_hosts} idle devices), Green:{green_count} Orange:{orange_count} Red:{red_count}.")
     return doc
 
 

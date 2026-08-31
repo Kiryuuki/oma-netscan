@@ -152,8 +152,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(600))
-    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(720))
+    contentWidth: panel.fittedContentWidth(Style.space(620))
+    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight + Style.space(32), Style.space(740))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -398,7 +398,7 @@ Panel {
               // Main Host or Repeater Header Card
               BorderSurface {
                 width: parent.width
-                implicitHeight: hostCol.implicitHeight + Style.space(18)
+                implicitHeight: hostCol.implicitHeight + Style.space(20)
                 radius: Style.cornerRadius
                 color: isSelected
                   ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
@@ -417,7 +417,7 @@ Panel {
                   anchors.margins: Style.space(10)
                   spacing: Style.space(6)
 
-                  // Line 1: Type Icon, Device Name, IP & Badges
+                  // Line 1: Type Icon, Device Name, IP in parens, Role Badge, Copy Action
                   Item {
                     width: parent.width
                     implicitHeight: Style.space(22)
@@ -449,9 +449,9 @@ Panel {
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
-                      // Secondary IP display if friendly name exists
+                      // Secondary IP display if friendly name exists and is distinct from IP
                       Text {
-                        visible: !isRepeater && !!modelData.friendlyName && modelData.friendlyName !== modelData.ip
+                        visible: !isRepeater && !!modelData.friendlyName && modelData.friendlyName !== modelData.ip && modelData.friendlyName.indexOf(modelData.ip) === -1
                         textFormat: Text.PlainText
                         text: "(" + modelData.ip + ")"
                         font.family: "Monospace"
@@ -487,7 +487,7 @@ Panel {
                       }
                     }
 
-                    // Accordion arrow for Repeater
+                    // Accordion arrow for Repeater / Copy for host
                     Text {
                       visible: isRepeater
                       anchors.right: parent.right
@@ -499,12 +499,24 @@ Panel {
                       font.bold: true
                       color: "#f59e0b"
                     }
+
+                    Text {
+                      visible: !isRepeater
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: "󰆏 Copy"
+                      font.family: root.contentFontFamily
+                      font.pixelSize: 11
+                      font.bold: true
+                      color: Color.accent
+                    }
                   }
 
-                  // Line 2: Vendor, MAC, Latency, Open Ports
+                  // Line 2: Vendor, MAC, Latency (Strict separation from ports)
                   Item {
                     width: parent.width
-                    implicitHeight: Style.space(18)
+                    implicitHeight: Style.space(16)
 
                     Row {
                       anchors.left: parent.left
@@ -536,37 +548,35 @@ Panel {
                         color: "#10b981"
                       }
                     }
+                  }
 
-                    // Open Ports tags with service names
-                    Row {
-                      anchors.right: parent.right
-                      anchors.verticalCenter: parent.verticalCenter
-                      spacing: 4
-                      visible: !isRepeater && modelData.portLabels && modelData.portLabels.length > 0
-                      Repeater {
-                        model: (modelData.portLabels || []).slice(0, 4)
-                        delegate: Rectangle {
-                          height: 16
-                          implicitWidth: portText.implicitWidth + 8
-                          radius: 3
+                  // Line 3: Dedicated Open Ports Badges Row (Zero overlap)
+                  Row {
+                    visible: !isRepeater && modelData.portLabels && modelData.portLabels.length > 0
+                    spacing: 4
+                    Repeater {
+                      model: (modelData.portLabels || []).slice(0, 6)
+                      delegate: Rectangle {
+                        height: 18
+                        implicitWidth: portText.implicitWidth + 10
+                        radius: 3
+                        color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1 || modelData.indexOf("Docker API") !== -1)
+                          ? Qt.rgba(0.94, 0.27, 0.27, 0.2)
+                          : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1 || modelData.indexOf("RDP") !== -1
+                              ? Qt.rgba(0.96, 0.62, 0.04, 0.2)
+                              : Qt.rgba(0.06, 0.72, 0.51, 0.16))
+                        Text {
+                          id: portText
+                          anchors.centerIn: parent
+                          textFormat: Text.PlainText
+                          text: String(modelData)
+                          font.family: "Monospace"
+                          font.pixelSize: 10
                           color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1 || modelData.indexOf("Docker API") !== -1)
-                            ? Qt.rgba(0.94, 0.27, 0.27, 0.2)
+                            ? "#ef4444"
                             : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1 || modelData.indexOf("RDP") !== -1
-                                ? Qt.rgba(0.96, 0.62, 0.04, 0.2)
-                                : Qt.rgba(0.06, 0.72, 0.51, 0.16))
-                          Text {
-                            id: portText
-                            anchors.centerIn: parent
-                            textFormat: Text.PlainText
-                            text: String(modelData)
-                            font.family: "Monospace"
-                            font.pixelSize: 10
-                            color: (modelData.indexOf("Insecure") !== -1 || modelData.indexOf("Telnet") !== -1 || modelData.indexOf("Docker API") !== -1)
-                              ? "#ef4444"
-                              : (modelData.indexOf("SMB") !== -1 || modelData.indexOf("FTP") !== -1 || modelData.indexOf("RDP") !== -1
-                                  ? "#f59e0b"
-                                  : "#10b981")
-                          }
+                                ? "#f59e0b"
+                                : "#10b981")
                         }
                       }
                     }
@@ -680,119 +690,69 @@ Panel {
                   delegate: BorderSurface {
                     required property var modelData
                     width: parent.width - Style.space(16)
-                    implicitHeight: downCardCol.implicitHeight + Style.space(16)
+                    implicitHeight: Style.space(34)
                     radius: 4
-                    color: (modelData.openPorts && modelData.openPorts.length > 0)
-                      ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.08)
-                      : (downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03))
-                    borderSpec: Border.controlSpec("normal", (modelData.openPorts && modelData.openPorts.length > 0) ? (modelData.category === "green" ? "#10b981" : Color.accent) : Qt.darker(root.contentForeground, 3.5), Color.accent)
+                    color: downMouse.containsMouse ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
+                    borderSpec: Border.controlSpec("normal", Qt.darker(root.contentForeground, 3.5), Color.accent)
 
-                    Column {
-                      id: downCardCol
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.top: parent.top
-                      anchors.margins: Style.space(8)
-                      spacing: Style.space(4)
+                    Item {
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(10)
+                      anchors.rightMargin: Style.space(10)
 
-                      // Line 1: Icon, Friendly Name, IP, Role Badge, Copy Action
-                      Item {
-                        width: parent.width
-                        implicitHeight: Style.space(20)
+                      Row {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(8)
 
-                        Row {
-                          anchors.left: parent.left
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.typeIcon || "󰖩"
+                          font.family: root.contentFontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          color: "#f59e0b"
                           anchors.verticalCenter: parent.verticalCenter
-                          spacing: Style.space(8)
-
-                          Text {
-                            textFormat: Text.PlainText
-                            text: modelData.typeIcon || "󰖩"
-                            font.family: root.contentFontFamily
-                            font.pixelSize: Style.font.bodySmall
-                            color: (modelData.category === "green" ? "#10b981" : ((modelData.openPorts && modelData.openPorts.length > 0) ? Color.accent : "#f59e0b"))
-                            anchors.verticalCenter: parent.verticalCenter
-                          }
-
-                          Text {
-                            textFormat: Text.PlainText
-                            text: modelData.friendlyName || modelData.ip
-                            font.family: root.contentFontFamily
-                            font.pixelSize: Style.font.caption
-                            font.bold: true
-                            color: root.contentForeground
-                            anchors.verticalCenter: parent.verticalCenter
-                          }
-
-                          Text {
-                            visible: !!modelData.friendlyName && modelData.friendlyName !== modelData.ip
-                            textFormat: Text.PlainText
-                            text: "(" + modelData.ip + ")"
-                            font.family: "Monospace"
-                            font.pixelSize: 10
-                            color: root.contentSubtle
-                            anchors.verticalCenter: parent.verticalCenter
-                          }
-
-                          // Role badge for active downstream hosts (e.g. Dokploy, Proxmox, Ubuntu)
-                          Rectangle {
-                            visible: modelData.guessedType !== "Generic Host"
-                            height: 16
-                            implicitWidth: downRoleText.implicitWidth + 8
-                            radius: 3
-                            color: modelData.category === "green" ? Qt.rgba(0.06, 0.72, 0.51, 0.2) : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
-                            anchors.verticalCenter: parent.verticalCenter
-                            Text {
-                              id: downRoleText
-                              anchors.centerIn: parent
-                              textFormat: Text.PlainText
-                              text: modelData.guessedType || ""
-                              font.family: root.contentFontFamily
-                              font.pixelSize: 9
-                              font.bold: true
-                              color: modelData.category === "green" ? "#10b981" : Color.accent
-                            }
-                          }
                         }
 
                         Text {
-                          anchors.right: parent.right
-                          anchors.verticalCenter: parent.verticalCenter
                           textFormat: Text.PlainText
-                          text: "󰆏 Copy"
+                          text: modelData.friendlyName || modelData.ip
                           font.family: root.contentFontFamily
-                          font.pixelSize: 11
+                          font.pixelSize: Style.font.caption
                           font.bold: true
-                          color: Color.accent
+                          color: root.contentForeground
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                          visible: !!modelData.friendlyName && modelData.friendlyName !== modelData.ip && modelData.friendlyName.indexOf(modelData.ip) === -1
+                          textFormat: Text.PlainText
+                          text: "(" + modelData.ip + ")"
+                          font.family: "Monospace"
+                          font.pixelSize: 10
+                          color: root.contentSubtle
+                          anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: modelData.guessedType || "Idle Client"
+                          font.family: root.contentFontFamily
+                          font.pixelSize: 10
+                          color: root.contentSubtle
+                          anchors.verticalCenter: parent.verticalCenter
                         }
                       }
 
-                      // Line 2: Open Ports on downstream host (if any)
-                      Row {
-                        visible: modelData.portLabels && modelData.portLabels.length > 0
-                        spacing: 4
-                        Repeater {
-                          model: (modelData.portLabels || []).slice(0, 5)
-                          delegate: Rectangle {
-                            height: 16
-                            implicitWidth: downPortText.implicitWidth + 8
-                            radius: 3
-                            color: (modelData.indexOf("Dokploy") !== -1 || modelData.indexOf("Jellyfin") !== -1 || modelData.indexOf("Proxmox") !== -1)
-                              ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2)
-                              : Qt.rgba(0.06, 0.72, 0.51, 0.16)
-                            Text {
-                              id: downPortText
-                              anchors.centerIn: parent
-                              textFormat: Text.PlainText
-                              text: String(modelData)
-                              font.family: "Monospace"
-                              font.pixelSize: 9
-                              color: (modelData.indexOf("Dokploy") !== -1 || modelData.indexOf("Jellyfin") !== -1 || modelData.indexOf("Proxmox") !== -1)
-                                ? Color.accent
-                                : "#10b981"
-                            }
-                          }
-                        }
+                      Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: "󰆏 Copy"
+                        font.family: root.contentFontFamily
+                        font.pixelSize: 11
+                        font.bold: true
+                        color: Color.accent
                       }
                     }
 
