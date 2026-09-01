@@ -1,10 +1,10 @@
 # OmaNetscan
 
-OmaNetscan is a native local network discovery, service fingerprinting, and security audit sidepanel for the Omarchy Desktop Shell. It automates ARP discovery, collapses proxy-ARP Wi-Fi repeater ghost hosts, looks up hardware manufacturers using an offline IEEE OUI table, and provides on-demand port inspection and vulnerability audits.
+OmaNetscan is a native local network discovery, service fingerprinting, and security audit sidepanel for the Omarchy Desktop Shell. It automates subnet discovery, collapses proxy-ARP Wi-Fi repeater ghost hosts, looks up hardware manufacturers using an offline IEEE OUI table, and provides on-demand port inspection and vulnerability audits.
 
 ## Features
 
-- Fast Network Recon: Discovers all active IP and MAC addresses across your local subnet.
+- Fast Network Recon: Discovers all active IP and MAC addresses across your local subnet using standard unprivileged user-space networking.
 - Service & OS Fingerprinting: Accurately identifies Proxmox VE cluster nodes, Dokploy container platforms, KASM workspaces, Ubuntu/Debian LXCs, DNS servers, IP cameras, and smart home appliances.
 - Categorized Security Auditing: Groups hosts into Active (Verified Services), Attention (Unencrypted HTTP, open SMB/RTSP, idle clients), and Risks (Insecure Telnet, unauthenticated Docker daemon APIs, plaintext FTP).
 - Explicit Category Explanations: Displays detailed rationales for every host classification and actionable remediation guidance.
@@ -13,6 +13,7 @@ OmaNetscan is a native local network discovery, service fingerprinting, and secu
 - On-Demand Deep Scan: Runs targeted service and OS inspection asynchronously when requested.
 - Desktop Notifications: Dispatches native Omarchy notifications when new previously unseen devices connect to your network.
 - Ultra-Lightweight Polling: Performs single-packet liveness checks on verified hosts to ensure zero network or device performance impact.
+- Zero Privilege Escalation: Operates 100% unprivileged with standard socket networking and requires no sudo, pkexec, or root capabilities.
 - Descriptor-Safe Storage: Writes local state atomically with mode 0600 under restrictive permissions.
 
 ## Installation
@@ -23,15 +24,7 @@ Install using the Omarchy plugin manager:
 omaplug install kiryuuki.oma-netscan
 ```
 
-### Network Capabilities Setup
-
-Direct ARP discovery requires raw socket access. Grant capabilities to arp-scan once during installation:
-
-```bash
-sudo setcap cap_net_raw,cap_net_admin+eip $(which arp-scan)
-```
-
-The plugin operates unprivileged as your regular desktop user and will never prompt for sudo at runtime.
+OmaNetscan operates completely unprivileged as your regular desktop user and works out-of-the-box without root permissions or special setup.
 
 ## Keyboard Shortcuts
 

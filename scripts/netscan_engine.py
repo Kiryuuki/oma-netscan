@@ -520,9 +520,28 @@ def perform_network_scan():
     prev_state = load_previous_state()
     cached_fingerprints = prev_state.get("cachedFingerprints", {})
 
-    # 1. Layer-2 ARP Scan
+    # 1. Unprivileged Subnet Sweep + Kernel ARP Harvesting
+    subnet_base = ".".join(subnet.split("/")[0].split(".")[:3])
+    
+    def unpriv_probe(last_octet):
+        target_ip = f"{subnet_base}.{last_octet}"
+        # Quick non-blocking socket connect or ping to trigger kernel ARP resolution
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.08)
+        try:
+            s.connect_ex((target_ip, 80))
+        except Exception:
+            pass
+        finally:
+            s.close()
+
+    # Dispatch unprivileged sweep across /24 subnet
+    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as sweep_exec:
+        sweep_exec.map(unpriv_probe, range(1, 255))
+
+    # Optional arp-scan acceleration (if installed and permitted)
     try:
-        res = subprocess.run(["arp-scan", "--localnet", "--plain", "-x"], capture_output=True, text=True, timeout=8)
+        res = subprocess.run(["arp-scan", "--localnet", "--plain", "-x"], capture_output=True, text=True, timeout=5)
         if res.returncode == 0:
             for line in res.stdout.splitlines():
                 parts = line.strip().split("\t")
@@ -532,12 +551,24 @@ def perform_network_scan():
                     vendor = parts[2].strip() if len(parts) > 2 else ""
                     if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and len(mac) == 17:
                         raw_devices.append({"ip": ip, "mac": mac, "rawVendor": vendor})
-        elif "Operation not permitted" in res.stderr or "Permission denied" in res.stderr:
-            has_cap_error = True
     except Exception:
-        has_cap_error = True
+        pass
 
-    # 2. Augment with kernel neighbour table
+    # 2. Augment from /proc/net/arp (unprivileged kernel ARP table)
+    try:
+        if os.path.exists("/proc/net/arp"):
+            with open("/proc/net/arp", "r", encoding="utf-8") as f:
+                for line in f.readlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        ip, mac = parts[0], parts[3].lower()
+                        if len(mac) == 17 and mac != "00:00:00:00:00:00":
+                            if not any(d["ip"] == ip for d in raw_devices):
+                                raw_devices.append({"ip": ip, "mac": mac, "rawVendor": ""})
+    except Exception:
+        pass
+
+    # Augment with kernel neighbour table (ip neigh)
     try:
         neigh_res = subprocess.run(["ip", "neigh", "show"], capture_output=True, text=True, timeout=3)
         for line in neigh_res.stdout.splitlines():
