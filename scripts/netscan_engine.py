@@ -101,26 +101,51 @@ PORT_NAMES = {
 }
 
 
+def read_bounded_json(file_path, max_bytes=MAX_STATE_BYTES):
+    p = Path(file_path)
+    if not p.exists():
+        return {}
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(str(p), flags)
+        with os.fdopen(fd, "rb") as stream:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+                return {}
+            if st.st_size > max_bytes:
+                return {}
+            raw = stream.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                return {}
+            return json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+
 def load_oui_table():
     if OUI_FILE.exists():
-        try:
-            with open(OUI_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+        return read_bounded_json(OUI_FILE, max_bytes=4 * 1024 * 1024)
     return {}
 
 
 OUI_TABLE = load_oui_table()
 
 
-def write_atomic(path, data):
+def write_atomic(path, data, max_bytes=MAX_STATE_BYTES):
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     raw_bytes = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    if len(raw_bytes) > MAX_STATE_BYTES:
-        print(f"Error: Payload size {len(raw_bytes)} exceeds ceiling {MAX_STATE_BYTES}", file=sys.stderr)
+    if len(raw_bytes) > max_bytes:
+        print(f"Error: Payload size {len(raw_bytes)} exceeds ceiling {max_bytes}", file=sys.stderr)
         return
+
+    parent_fd = os.open(str(p.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        pst = os.fstat(parent_fd)
+        if not stat.S_ISDIR(pst.st_mode) or pst.st_uid != os.getuid():
+            raise PermissionError("Parent directory ownership mismatch or not a directory")
+    finally:
+        os.close(parent_fd)
 
     handle, temp_name = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
     try:
@@ -140,16 +165,8 @@ def write_atomic(path, data):
 
 
 def load_previous_state():
-    if not STATE_FILE.exists():
-        return {}
-    try:
-        st = STATE_FILE.stat()
-        if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):
-            return {}
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return read_bounded_json(STATE_FILE)
+
 
 
 def resolve_vendor(mac: str) -> str:
@@ -181,29 +198,45 @@ def get_default_gateway():
     return "192.168.100.1", "wlo1"
 
 
-def get_local_ip_and_subnet():
-    gw, iface = get_default_gateway()
-    local_ip = ""
-    subnet = "192.168.100.0/24"
+def get_verified_local_networks():
+    """Enumerates verified IPv4 private interfaces with strict CIDR masks."""
+    networks = []
     try:
-        res = subprocess.run(["ip", "route", "show", "dev", iface], capture_output=True, text=True, timeout=2)
+        res = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=2)
+        if len(res.stdout) > 64 * 1024:
+            return networks
         for line in res.stdout.splitlines():
-            if "scope link" in line and "/" in line:
-                parts = line.split()
-                subnet = parts[0]
-                if "src" in parts:
-                    local_ip = parts[parts.index("src") + 1]
+            parts = line.split()
+            if len(parts) >= 4:
+                iface = parts[1]
+                cidr = parts[3]
+                if iface == "lo" or iface.startswith("docker") or iface.startswith("veth") or iface.startswith("br-"):
+                    continue
+                try:
+                    net = ipaddress.ip_network(cidr, strict=False)
+                    if net.is_private and not net.is_loopback:
+                        networks.append({
+                            "iface": iface,
+                            "ip": cidr.split("/")[0],
+                            "network": net,
+                            "cidr": str(net)
+                        })
+                except ValueError:
+                    continue
     except Exception:
         pass
-    if not local_ip:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect((gw, 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            local_ip = "192.168.100.3"
-    return local_ip, subnet
+    return networks
+
+
+def get_local_ip_and_subnet():
+    gw, iface = get_default_gateway()
+    networks = get_verified_local_networks()
+    for n in networks:
+        if n["iface"] == iface:
+            return n["ip"], n["cidr"]
+    if networks:
+        return networks[0]["ip"], networks[0]["cidr"]
+    return "192.168.100.3", "192.168.100.0/24"
 
 
 def discover_mdns_devices():
@@ -520,14 +553,30 @@ def perform_network_scan():
     prev_state = load_previous_state()
     cached_fingerprints = prev_state.get("cachedFingerprints", {})
 
-    # 1. Unprivileged Subnet Sweep + Kernel ARP Harvesting
-    subnet_base = ".".join(subnet.split("/")[0].split(".")[:3])
-    
-    def unpriv_probe(last_octet):
-        target_ip = f"{subnet_base}.{last_octet}"
-        # Quick non-blocking socket connect or ping to trigger kernel ARP resolution
+    # 1. Verified Interface Subnet Sweep + Kernel ARP Harvesting
+    networks = get_verified_local_networks()
+    active_net = None
+    for n in networks:
+        if n["cidr"] == subnet or n["ip"] == local_ip:
+            active_net = n["network"]
+            break
+    if not active_net and networks:
+        active_net = networks[0]["network"]
+
+    # Bound sweep budget to maximum 256 hosts per sweep to prevent excessive packet flooding
+    target_hosts = []
+    if active_net:
+        for idx, host_ip in enumerate(active_net.hosts()):
+            if idx >= 256:
+                break
+            target_hosts.append(str(host_ip))
+    else:
+        subnet_base = ".".join(local_ip.split(".")[:3])
+        target_hosts = [f"{subnet_base}.{i}" for i in range(1, 255)]
+
+    def unpriv_probe(target_ip):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.08)
+        s.settimeout(0.06)
         try:
             s.connect_ex((target_ip, 80))
         except Exception:
@@ -535,9 +584,10 @@ def perform_network_scan():
         finally:
             s.close()
 
-    # Dispatch unprivileged sweep across /24 subnet
-    with concurrent.futures.ThreadPoolExecutor(max_workers=64) as sweep_exec:
-        sweep_exec.map(unpriv_probe, range(1, 255))
+    # Threaded unprivileged socket sweep with bounded global socket budget
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as sweep_exec:
+        sweep_exec.map(unpriv_probe, target_hosts)
+
 
     # Optional arp-scan acceleration (if installed and permitted)
     try:
@@ -847,21 +897,38 @@ def send_notification(title: str, desc: str):
 
 
 def run_deep_scan(target_ip: str):
-    """Executes single-host nmap -sV -O and returns structured JSON."""
-    if not re.match(r"^\d+\.\d+\.\d+\.\d+$", target_ip):
-        return {"ok": False, "error": "Invalid target IP address"}
+    """Executes single-host nmap -sV -O with strict private subnet validation and bounded output."""
+    try:
+        ip_obj = ipaddress.ip_address(target_ip.strip())
+        if not ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast:
+            return {"ok": False, "error": "Target must be a private IPv4 address on the local network"}
+
+        # Validate that target falls inside one of the verified local network interfaces
+        networks = get_verified_local_networks()
+        is_local = any(ip_obj in n["network"] for n in networks)
+        if not is_local and networks:
+            return {"ok": False, "error": f"Target {target_ip} is outside verified local subnet boundaries"}
+    except ValueError:
+        return {"ok": False, "error": "Invalid IPv4 address format"}
 
     try:
-        cmd = ["nmap", "-sV", "-O", "--top-ports", "50", target_ip]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = subprocess.Popen(
+            ["nmap", "-sV", "-O", "--top-ports", "50", str(ip_obj)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        out, err = proc.communicate(timeout=25)
+        # Enforce 64 KB output ceiling
+        if len(out) > 64 * 1024:
+            out = out[:64 * 1024] + "\n[Output truncated at 64 KB limit]"
+        
         return {
-            "ok": res.returncode == 0,
-            "ip": target_ip,
-            "raw": res.stdout,
-            "summary": "Deep scan completed successfully" if res.returncode == 0 else res.stderr
+            "ok": proc.returncode == 0,
+            "ip": str(ip_obj),
+            "raw": out,
+            "summary": "Deep scan completed successfully" if proc.returncode == 0 else (err[:1024] if err else "Scan failed")
         }
     except Exception as e:
-        return {"ok": False, "ip": target_ip, "error": str(e)}
+        return {"ok": False, "ip": str(ip_obj), "error": str(e)}
 
 
 def main():
