@@ -126,29 +126,74 @@ Panel {
     root.expandedRepeaters = updated
   }
 
+    readonly property var categoryCounts: {
+    var list = root.netscanData && root.netscanData.hosts ? root.netscanData.hosts : []
+    var all = list.length
+    var servers = 0
+    var lxc = 0
+    var apps = 0
+    var clients = 0
+    var security = 0
+    
+    for (var i = 0; i < list.length; i++) {
+      var h = list[i]
+      var gt = (h.guessedType || "").toLowerCase()
+      var ports = h.openPorts || []
+      var hasWarn = (h.warnings && h.warnings.length > 0) || h.category === "red"
+      
+      if (hasWarn) security++
+      if (gt.indexOf("proxmox") !== -1 || gt.indexOf("hypervisor") !== -1 || gt.indexOf("gateway") !== -1 || gt.indexOf("router") !== -1 || gt.indexOf("dns") !== -1) {
+        servers++
+      }
+      if (gt.indexOf("lxc") !== -1 || gt.indexOf("ubuntu") !== -1 || gt.indexOf("debian") !== -1 || gt.indexOf("container") !== -1 || gt.indexOf("docker") !== -1) {
+        lxc++
+      }
+      if (ports.some(function(p) { return [80, 443, 3000, 3001, 5000, 5055, 5173, 7878, 8006, 8080, 8096, 8123, 8443, 8989, 9000, 9443, 37575].indexOf(p) !== -1 })) {
+        apps++
+      }
+      if (gt.indexOf("workstation") !== -1 || gt.indexOf("host (ssh)") !== -1 || gt.indexOf("phone") !== -1 || gt.indexOf("mobile") !== -1 || gt.indexOf("apple") !== -1 || gt.indexOf("tv") !== -1 || gt.indexOf("camera") !== -1 || gt.indexOf("generic") !== -1 || gt.indexOf("repeater") !== -1) {
+        clients++
+      }
+    }
+    return { all: all, servers: servers, lxc: lxc, apps: apps, clients: clients, security: security }
+  }
+
   readonly property var visibleHosts: {
     var list = root.netscanData && root.netscanData.hosts ? root.netscanData.hosts : []
     if (root.activeTab === "all") return list
-    if (root.activeTab === "green") {
+    if (root.activeTab === "servers") {
       return list.filter(function(h) {
-        if (h.isRepeater) return (h.downstreamHosts || []).some(function(d) { return d.category === "green" })
-        return h.category === "green"
+        var gt = (h.guessedType || "").toLowerCase()
+        return gt.indexOf("proxmox") !== -1 || gt.indexOf("hypervisor") !== -1 || gt.indexOf("gateway") !== -1 || gt.indexOf("router") !== -1 || gt.indexOf("dns") !== -1
       })
     }
-    if (root.activeTab === "orange") {
+    if (root.activeTab === "lxc") {
       return list.filter(function(h) {
-        if (h.isRepeater) return true
-        return h.category === "orange"
+        var gt = (h.guessedType || "").toLowerCase()
+        return gt.indexOf("lxc") !== -1 || gt.indexOf("ubuntu") !== -1 || gt.indexOf("debian") !== -1 || gt.indexOf("container") !== -1 || gt.indexOf("docker") !== -1
       })
     }
-    if (root.activeTab === "red") {
+    if (root.activeTab === "apps") {
       return list.filter(function(h) {
-        if (h.isRepeater) return (h.downstreamHosts || []).some(function(d) { return d.category === "red" })
+        var ports = h.openPorts || []
+        return ports.some(function(p) { return [80, 443, 3000, 3001, 5000, 5055, 5173, 7878, 8006, 8080, 8096, 8123, 8443, 8989, 9000, 9443, 37575].indexOf(p) !== -1 })
+      })
+    }
+    if (root.activeTab === "clients") {
+      return list.filter(function(h) {
+        var gt = (h.guessedType || "").toLowerCase()
+        return gt.indexOf("workstation") !== -1 || gt.indexOf("host (ssh)") !== -1 || gt.indexOf("phone") !== -1 || gt.indexOf("mobile") !== -1 || gt.indexOf("apple") !== -1 || gt.indexOf("tv") !== -1 || gt.indexOf("camera") !== -1 || gt.indexOf("generic") !== -1 || gt.indexOf("repeater") !== -1
+      })
+    }
+    if (root.activeTab === "security") {
+      return list.filter(function(h) {
+        if (h.isRepeater) return (h.downstreamHosts || []).some(function(d) { return d.category === "red" || (d.warnings && d.warnings.length > 0) })
         return h.category === "red" || (h.warnings && h.warnings.length > 0)
       })
     }
     return list
   }
+
 
   function getSelectedHost() {
     if (visibleHosts && visibleHosts[root.selectedIndex]) {
@@ -194,9 +239,11 @@ Panel {
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
         else if (t === "1") { root.activeTab = "all"; root.selectedIndex = 0 }
-        else if (t === "2") { root.activeTab = "green"; root.selectedIndex = 0 }
-        else if (t === "3") { root.activeTab = "orange"; root.selectedIndex = 0 }
-        else if (t === "4") { root.activeTab = "red"; root.selectedIndex = 0 }
+        else if (t === "2") { root.activeTab = "servers"; root.selectedIndex = 0 }
+        else if (t === "3") { root.activeTab = "lxc"; root.selectedIndex = 0 }
+        else if (t === "4") { root.activeTab = "apps"; root.selectedIndex = 0 }
+        else if (t === "5") { root.activeTab = "clients"; root.selectedIndex = 0 }
+        else if (t === "6") { root.activeTab = "security"; root.selectedIndex = 0 }
         else if (t === "d" || t === "D") {
           var h = root.getSelectedHost()
           if (h && !h.isRepeater && h.ip) root.triggerDeepScan(h.ip)
@@ -404,85 +451,65 @@ Panel {
             }
           }
 
-          // --- CATEGORY TABS (ALL / GREEN / ORANGE / RED) ---
-          Row {
+          // --- CATEGORY & DEVICE FILTER TABS ---
+          RowLayout {
             width: parent.width - Style.space(28)
-            spacing: Style.space(6)
+            spacing: Style.space(4)
 
-            // Tab 1: All
-            BorderSurface {
-              id: tabAll
-              readonly property bool isSelected: root.activeTab === "all"
-              width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(32)
-              radius: Style.cornerRadius
-              color: tabAll.isSelected ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
-              borderSpec: Border.controlSpec("normal", tabAll.isSelected ? Color.accent : Qt.darker(root.contentForeground, 3.5), Color.accent)
+            Repeater {
+              model: [
+                { key: "all", label: "All (" + root.categoryCounts.all + ")", icon: "󰒋", color: Color.accent },
+                { key: "servers", label: "Nodes (" + root.categoryCounts.servers + ")", icon: "󰒋", color: "#10b981" },
+                { key: "lxc", label: "LXC/OS (" + root.categoryCounts.lxc + ")", icon: "󰣚", color: "#06b6d4" },
+                { key: "apps", label: "Exposed (" + root.categoryCounts.apps + ")", icon: "󰖟", color: "#8b5cf6" },
+                { key: "clients", label: "Clients (" + root.categoryCounts.clients + ")", icon: "󰌢", color: "#f59e0b" },
+                { key: "security", label: "Audits (" + root.categoryCounts.security + ")", icon: "󰅖", color: "#ef4444" }
+              ]
 
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(4)
-                Text { textFormat: Text.PlainText; text: "󰒋"; font.pixelSize: Style.font.caption; color: tabAll.isSelected ? Color.accent : root.contentSubtle }
-                Text { textFormat: Text.PlainText; text: "All (" + (root.netscanData.totalHosts || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabAll.isSelected; color: tabAll.isSelected ? Color.accent : root.contentForeground }
+              delegate: BorderSurface {
+                id: cTabBtn
+                required property var modelData
+                readonly property bool isSelected: root.activeTab === modelData.key
+
+                Layout.fillWidth: true
+                implicitHeight: Style.space(30)
+                radius: Style.cornerRadius
+                color: isSelected ? Qt.rgba(modelData.color.r, modelData.color.g, modelData.color.b, 0.22) : (cTabHover.hovered ? Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.08) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03))
+                borderSpec: Border.controlSpec(isSelected ? "focus" : "normal", isSelected ? modelData.color : Qt.darker(root.contentForeground, 3.5), modelData.color)
+
+                HoverHandler { id: cTabHover }
+
+                Row {
+                  anchors.centerIn: parent
+                  spacing: Style.space(3)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: cTabBtn.modelData.icon
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    color: cTabBtn.isSelected ? cTabBtn.modelData.color : root.contentSubtle
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: cTabBtn.modelData.label
+                    font.family: root.contentFontFamily
+                    font.pixelSize: 10
+                    font.bold: cTabBtn.isSelected
+                    color: cTabBtn.isSelected ? cTabBtn.modelData.color : root.contentForeground
+                  }
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.activeTab = cTabBtn.modelData.key
+                    root.selectedIndex = 0
+                  }
+                }
               }
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "all"; root.selectedIndex = 0 } }
-            }
-
-            // Tab 2: Green (Verified / Active)
-            BorderSurface {
-              id: tabGreen
-              readonly property bool isSelected: root.activeTab === "green"
-              width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(32)
-              radius: Style.cornerRadius
-              color: tabGreen.isSelected ? Qt.rgba(0.06, 0.72, 0.51, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
-              borderSpec: Border.controlSpec("normal", tabGreen.isSelected ? "#10b981" : Qt.darker(root.contentForeground, 3.5), "#10b981")
-
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(4)
-                Text { textFormat: Text.PlainText; text: "󰄲"; font.pixelSize: Style.font.caption; color: "#10b981" }
-                Text { textFormat: Text.PlainText; text: "Active (" + (root.netscanData.greenCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabGreen.isSelected; color: tabGreen.isSelected ? "#10b981" : root.contentForeground }
-              }
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "green"; root.selectedIndex = 0 } }
-            }
-
-            // Tab 3: Orange (Attention / AP)
-            BorderSurface {
-              id: tabOrange
-              readonly property bool isSelected: root.activeTab === "orange"
-              width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(32)
-              radius: Style.cornerRadius
-              color: tabOrange.isSelected ? Qt.rgba(0.96, 0.62, 0.04, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
-              borderSpec: Border.controlSpec("normal", tabOrange.isSelected ? "#f59e0b" : Qt.darker(root.contentForeground, 3.5), "#f59e0b")
-
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(4)
-                Text { textFormat: Text.PlainText; text: "󰀝"; font.pixelSize: Style.font.caption; color: "#f59e0b" }
-                Text { textFormat: Text.PlainText; text: "Attention (" + (root.netscanData.orangeCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabOrange.isSelected; color: tabOrange.isSelected ? "#f59e0b" : root.contentForeground }
-              }
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "orange"; root.selectedIndex = 0 } }
-            }
-
-            // Tab 4: Red (Security Notices)
-            BorderSurface {
-              id: tabRed
-              readonly property bool isSelected: root.activeTab === "red"
-              width: (parent.width - Style.space(18)) / 4
-              implicitHeight: Style.space(32)
-              radius: Style.cornerRadius
-              color: tabRed.isSelected ? Qt.rgba(0.94, 0.27, 0.27, 0.2) : Qt.rgba(root.contentForeground.r, root.contentForeground.g, root.contentForeground.b, 0.03)
-              borderSpec: Border.controlSpec("normal", tabRed.isSelected ? "#ef4444" : Qt.darker(root.contentForeground, 3.5), "#ef4444")
-
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(4)
-                Text { textFormat: Text.PlainText; text: "󰚌"; font.pixelSize: Style.font.caption; color: "#ef4444" }
-                Text { textFormat: Text.PlainText; text: "Risks (" + (root.netscanData.securityWarningsCount || 0) + ")"; font.family: root.contentFontFamily; font.pixelSize: 11; font.bold: tabRed.isSelected; color: tabRed.isSelected ? "#ef4444" : root.contentForeground }
-              }
-              MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.activeTab = "red"; root.selectedIndex = 0 } }
             }
           }
 
