@@ -10,10 +10,13 @@ Designed for zero-impact, ultra-lightweight network polling:
 
 import argparse
 import concurrent.futures
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import select
+import signal
 import socket
 import stat
 import subprocess
@@ -101,25 +104,133 @@ PORT_NAMES = {
 }
 
 
-def read_bounded_json(file_path, max_bytes=MAX_STATE_BYTES):
-    p = Path(file_path)
-    if not p.exists():
-        return {}
+def run_bounded_process(cmd, timeout=3.0, max_bytes=64 * 1024, max_stderr_bytes=16 * 1024):
+    """Executes a subprocess with streaming producer caps, bounded stderr, and process-group cleanup."""
     try:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-        fd = os.open(str(p), flags)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            text=True
+        )
+    except Exception:
+        return "", ""
+
+    out_chunks = []
+    err_chunks = []
+    total_out = 0
+    total_err = 0
+    start_time = time.time()
+
+    try:
+        os.set_blocking(proc.stdout.fileno(), False)
+        os.set_blocking(proc.stderr.fileno(), False)
+
+        while True:
+            if time.time() - start_time > timeout:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+
+            rlist, _, _ = select.select([proc.stdout, proc.stderr], [], [], 0.1)
+            for stream in rlist:
+                try:
+                    chunk = stream.read(4096)
+                except Exception:
+                    chunk = None
+                if chunk:
+                    if stream is proc.stdout:
+                        if total_out < max_bytes:
+                            allowed = max_bytes - total_out
+                            out_chunks.append(chunk[:allowed])
+                            total_out += len(chunk[:allowed])
+                    elif stream is proc.stderr:
+                        if total_err < max_stderr_bytes:
+                            allowed = max_stderr_bytes - total_err
+                            err_chunks.append(chunk[:allowed])
+                            total_err += len(chunk[:allowed])
+
+            if proc.poll() is not None:
+                try:
+                    rest_out = proc.stdout.read()
+                    if rest_out and total_out < max_bytes:
+                        out_chunks.append(rest_out[:max_bytes - total_out])
+                except Exception:
+                    pass
+                try:
+                    rest_err = proc.stderr.read()
+                    if rest_err and total_err < max_stderr_bytes:
+                        err_chunks.append(rest_err[:max_stderr_bytes - total_err])
+                except Exception:
+                    pass
+                break
+    except Exception:
+        pass
+    finally:
+        try:
+            if proc.poll() is None:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=0.3)
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGKILL)
+                    proc.wait(timeout=0.2)
+        except Exception:
+            pass
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
+        except Exception:
+            pass
+
+    return "".join(out_chunks), "".join(err_chunks)
+
+
+def read_bounded_json(file_path, max_bytes=MAX_STATE_BYTES):
+    """Descriptor-safe bounded JSON reader using pinned parent directory descriptor."""
+    p = Path(file_path)
+    if not p.parent.exists():
+        return {}
+    dir_fd = -1
+    fd = -1
+    try:
+        dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        dir_fd = os.open(str(p.parent), dir_flags)
+        st_dir = os.fstat(dir_fd)
+        if not stat.S_ISDIR(st_dir.st_mode) or st_dir.st_uid != os.getuid():
+            return {}
+
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        try:
+            fd = os.open(p.name, file_flags, dir_fd=dir_fd)
+        except (FileNotFoundError, OSError):
+            return {}
+
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > max_bytes:
+            return {}
+
         with os.fdopen(fd, "rb") as stream:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
-                return {}
-            if st.st_size > max_bytes:
-                return {}
+            fd = -1
             raw = stream.read(max_bytes + 1)
             if len(raw) > max_bytes:
                 return {}
             return json.loads(raw.decode("utf-8", errors="replace"))
     except Exception:
         return {}
+    finally:
+        if fd != -1:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if dir_fd != -1:
+            try:
+                os.close(dir_fd)
+            except Exception:
+                pass
 
 
 def load_oui_table():
@@ -132,6 +243,7 @@ OUI_TABLE = load_oui_table()
 
 
 def write_atomic(path, data, max_bytes=MAX_STATE_BYTES):
+    """Descriptor-safe atomic writer with pinned parent directory descriptor and refused unsafe targets."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     raw_bytes = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -139,29 +251,49 @@ def write_atomic(path, data, max_bytes=MAX_STATE_BYTES):
         print(f"Error: Payload size {len(raw_bytes)} exceeds ceiling {max_bytes}", file=sys.stderr)
         return
 
-    parent_fd = os.open(str(p.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    dir_fd = os.open(str(p.parent), dir_flags)
     try:
-        pst = os.fstat(parent_fd)
+        pst = os.fstat(dir_fd)
         if not stat.S_ISDIR(pst.st_mode) or pst.st_uid != os.getuid():
             raise PermissionError("Parent directory ownership mismatch or not a directory")
-    finally:
-        os.close(parent_fd)
 
-    handle, temp_name = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+        # Refuse unsafe existing targets rather than unlinking them
+        try:
+            target_stat = os.stat(p.name, dir_fd=dir_fd, follow_symlinks=False)
+            if not stat.S_ISREG(target_stat.st_mode) or target_stat.st_uid != os.getuid():
+                raise PermissionError("Target file is not a regular file owned by caller; refusing publication")
+        except FileNotFoundError:
+            pass
+
+        handle, temp_name = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+        try:
+            os.fchmod(handle, 0o600)
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(raw_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
+
+            os.replace(temp_name, p)
+            os.fsync(dir_fd)
+        except BaseException:
+            Path(temp_name).unlink(missing_ok=True)
+            raise
+    finally:
+        os.close(dir_fd)
+
+
+def is_ip_in_local_subnets(ip_str: str, networks: list) -> bool:
+    """Proves an IP belongs to a verified active local interface subnet."""
+    if not ip_str:
+        return False
     try:
-        os.fchmod(handle, 0o600)
-        with os.fdopen(handle, "wb") as stream:
-            stream.write(raw_bytes)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if p.exists():
-            st = p.lstat()
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
-                p.unlink(missing_ok=True)
-        os.replace(temp_name, p)
-    except BaseException:
-        Path(temp_name).unlink(missing_ok=True)
-        raise
+        addr = ipaddress.ip_address(ip_str.strip())
+        if not addr.is_private or addr.is_loopback or addr.is_multicast:
+            return False
+        return any(addr in n["network"] for n in networks)
+    except ValueError:
+        return False
 
 
 def load_previous_state():
@@ -189,8 +321,8 @@ def resolve_vendor(mac: str) -> str:
 
 def get_default_gateway():
     try:
-        res = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=2)
-        m = re.search(r"default via (\d+\.\d+\.\d+\.\d+) dev (\S+)", res.stdout)
+        out, _ = run_bounded_process(["ip", "route", "show", "default"], timeout=2.0, max_bytes=4096)
+        m = re.search(r"default via (\d+\.\d+\.\d+\.\d+) dev (\S+)", out)
         if m:
             return m.group(1), m.group(2)
     except Exception:
@@ -202,10 +334,8 @@ def get_verified_local_networks():
     """Enumerates verified IPv4 private interfaces with strict CIDR masks."""
     networks = []
     try:
-        res = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=2)
-        if len(res.stdout) > 64 * 1024:
-            return networks
-        for line in res.stdout.splitlines():
+        out, _ = run_bounded_process(["ip", "-o", "-4", "addr", "show"], timeout=2.0, max_bytes=32768)
+        for line in out.splitlines():
             parts = line.split()
             if len(parts) >= 4:
                 iface = parts[1]
@@ -243,46 +373,53 @@ def discover_mdns_devices():
     """Queries avahi-browse for mDNS friendly names, device models, and types."""
     mdns_info = {}
     try:
-        res = subprocess.run(["avahi-browse", "-artp", "-t"], capture_output=True, text=True, timeout=3)
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                if line.startswith("="):
-                    parts = line.split(";")
-                    if len(parts) >= 8:
-                        ip = parts[7].strip()
-                        hostname = parts[6].strip()
-                        txt_records = parts[9] if len(parts) > 9 else ""
-                        
-                        friendly_name = ""
-                        device_type = ""
-                        
-                        m_name = re.search(r'"name=([^"]+)"', txt_records)
-                        if m_name:
-                            friendly_name = m_name.group(1)
-                        m_type = re.search(r'"type=([^"]+)"', txt_records)
-                        if m_type:
-                            device_type = m_type.group(1)
+        out, _ = run_bounded_process(["avahi-browse", "-artp", "-t"], timeout=3.0, max_bytes=64 * 1024)
+        for line in out.splitlines():
+            if line.startswith("="):
+                parts = line.split(";")
+                if len(parts) >= 8:
+                    ip = parts[7].strip()
+                    hostname = parts[6].strip()
+                    txt_records = parts[9] if len(parts) > 9 else ""
+                    
+                    friendly_name = ""
+                    device_type = ""
+                    
+                    m_name = re.search(r'"name=([^"]+)"', txt_records)
+                    if m_name:
+                        friendly_name = m_name.group(1)
+                    m_type = re.search(r'"type=([^"]+)"', txt_records)
+                    if m_type:
+                        device_type = m_type.group(1)
 
-                        if not friendly_name:
-                            friendly_name = hostname.replace(".local", "")
+                    if not friendly_name:
+                        friendly_name = hostname.replace(".local", "")
 
-                        if ip:
-                            mdns_info[ip] = {
-                                "hostname": hostname,
-                                "friendlyName": friendly_name,
-                                "deviceType": device_type
-                            }
+                    if ip:
+                        mdns_info[ip] = {
+                            "hostname": hostname,
+                            "friendlyName": friendly_name,
+                            "deviceType": device_type
+                        }
     except Exception:
         pass
     return mdns_info
 
 
-def probe_single_host(ip: str, cached_entry: dict = None):
+def probe_single_host(ip: str, cached_entry: dict = None, deadline: float = 0.0):
     """
-    Lightweight port probe. If cached_entry exists with known verified ports,
-    first probes the known primary port to verify liveness (1 single packet).
-    Only performs a full scan if liveness changes or host is unverified.
+    Lightweight port probe with aggregate deadline enforcement.
+    If cached_entry exists with known verified ports, first probes the known primary port to verify liveness.
     """
+    if deadline > 0 and time.time() >= deadline:
+        prev_fp = cached_entry or {}
+        return {
+            "openPorts": prev_fp.get("openPorts", []),
+            "latencyMs": None,
+            "hostname": prev_fp.get("hostname", ""),
+            "sshBanner": prev_fp.get("sshBanner", "")
+        }
+
     open_ports = []
     latencies = []
     ssh_banner = cached_entry.get("sshBanner", "") if cached_entry else ""
@@ -291,7 +428,6 @@ def probe_single_host(ip: str, cached_entry: dict = None):
     # Quick liveness optimization for known verified nodes
     if cached_entry and cached_entry.get("openPorts"):
         known_p = cached_entry["openPorts"]
-        # Fast single-port liveness check
         primary = known_p[0]
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.35)
@@ -313,6 +449,8 @@ def probe_single_host(ip: str, cached_entry: dict = None):
 
     # Full probe for new/unverified hosts
     for port in ports_to_check:
+        if deadline > 0 and time.time() >= deadline:
+            break
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.35)
         t0 = time.perf_counter()
@@ -589,52 +727,65 @@ def perform_network_scan():
         sweep_exec.map(unpriv_probe, target_hosts)
 
 
+    # Enforce global scan deadline across entire sweep and probe pipeline
+    scan_deadline = time.time() + 15.0
+
     # Optional arp-scan acceleration (if installed and permitted)
     try:
-        res = subprocess.run(["arp-scan", "--localnet", "--plain", "-x"], capture_output=True, text=True, timeout=5)
-        if res.returncode == 0:
-            for line in res.stdout.splitlines():
-                parts = line.strip().split("\t")
-                if len(parts) >= 2:
-                    ip = parts[0].strip()
-                    mac = parts[1].strip().lower()
-                    vendor = parts[2].strip() if len(parts) > 2 else ""
-                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and len(mac) == 17:
+        out, _ = run_bounded_process(["arp-scan", "--localnet", "--plain", "-x"], timeout=4.0, max_bytes=64 * 1024)
+        for line in out.splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) >= 2:
+                ip = parts[0].strip()
+                mac = parts[1].strip().lower()
+                vendor = parts[2].strip() if len(parts) > 2 else ""
+                if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and len(mac) == 17:
+                    if is_ip_in_local_subnets(ip, networks):
                         raw_devices.append({"ip": ip, "mac": mac, "rawVendor": vendor})
+                        if len(raw_devices) >= 256:
+                            break
     except Exception:
         pass
 
-    # 2. Augment from /proc/net/arp (unprivileged kernel ARP table)
+    # 2. Augment from /proc/net/arp (unprivileged kernel ARP table with streaming bounds)
     try:
         if os.path.exists("/proc/net/arp"):
-            with open("/proc/net/arp", "r", encoding="utf-8") as f:
-                for line in f.readlines()[1:]:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            fd = os.open("/proc/net/arp", flags)
+            with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as f:
+                for idx, line in enumerate(f):
+                    if idx == 0:
+                        continue
+                    if idx > 256 or len(raw_devices) >= 256:
+                        break
                     parts = line.split()
                     if len(parts) >= 4:
                         ip, mac = parts[0], parts[3].lower()
                         if len(mac) == 17 and mac != "00:00:00:00:00:00":
-                            if not any(d["ip"] == ip for d in raw_devices):
+                            if is_ip_in_local_subnets(ip, networks) and not any(d["ip"] == ip for d in raw_devices):
                                 raw_devices.append({"ip": ip, "mac": mac, "rawVendor": ""})
     except Exception:
         pass
 
     # Augment with kernel neighbour table (ip neigh)
     try:
-        neigh_res = subprocess.run(["ip", "neigh", "show"], capture_output=True, text=True, timeout=3)
-        for line in neigh_res.stdout.splitlines():
+        neigh_out, _ = run_bounded_process(["ip", "neigh", "show"], timeout=2.0, max_bytes=64 * 1024)
+        for line in neigh_out.splitlines():
             m = re.match(r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+([0-9a-fA-F:]{17})\s+(\S+)", line)
             if m:
                 ip, mac, state = m.group(1), m.group(2).lower(), m.group(3)
                 if state in ("REACHABLE", "STALE", "DELAY"):
-                    if not any(d["ip"] == ip for d in raw_devices):
+                    if is_ip_in_local_subnets(ip, networks) and not any(d["ip"] == ip for d in raw_devices):
                         raw_devices.append({"ip": ip, "mac": mac, "rawVendor": ""})
+                        if len(raw_devices) >= 256:
+                            break
     except Exception:
         pass
 
     # Ensure Gateway & Local Host are included
-    if gateway_ip and not any(d["ip"] == gateway_ip for d in raw_devices):
+    if gateway_ip and is_ip_in_local_subnets(gateway_ip, networks) and not any(d["ip"] == gateway_ip for d in raw_devices):
         raw_devices.append({"ip": gateway_ip, "mac": "", "rawVendor": ""})
-    if local_ip and not any(d["ip"] == local_ip for d in raw_devices):
+    if local_ip and is_ip_in_local_subnets(local_ip, networks) and not any(d["ip"] == local_ip for d in raw_devices):
         raw_devices.append({"ip": local_ip, "mac": "", "rawVendor": ""})
 
     # Deduplicate by IP
@@ -646,10 +797,10 @@ def perform_network_scan():
     # 3. Discover mDNS Friendly Names in Parallel
     mdns_info = discover_mdns_devices()
 
-    # 4. Multi-threaded Port & Security Probing with Liveness Short-Circuit
+    # 4. Multi-threaded Port & Security Probing with Liveness Short-Circuit & Aggregate Deadline
     probe_results = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-        future_map = {executor.submit(probe_single_host, d["ip"], cached_fingerprints.get(d["ip"])): d["ip"] for d in device_list}
+        future_map = {executor.submit(probe_single_host, d["ip"], cached_fingerprints.get(d["ip"]), scan_deadline): d["ip"] for d in device_list}
         for future in concurrent.futures.as_completed(future_map):
             ip = future_map[future]
             try:
@@ -912,20 +1063,17 @@ def run_deep_scan(target_ip: str):
         return {"ok": False, "error": "Invalid IPv4 address format"}
 
     try:
-        proc = subprocess.Popen(
+        out, err = run_bounded_process(
             ["nmap", "-sV", "-O", "--top-ports", "50", str(ip_obj)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            timeout=25.0,
+            max_bytes=64 * 1024,
+            max_stderr_bytes=16 * 1024
         )
-        out, err = proc.communicate(timeout=25)
-        # Enforce 64 KB output ceiling
-        if len(out) > 64 * 1024:
-            out = out[:64 * 1024] + "\n[Output truncated at 64 KB limit]"
-        
         return {
-            "ok": proc.returncode == 0,
+            "ok": bool(out.strip()),
             "ip": str(ip_obj),
             "raw": out,
-            "summary": "Deep scan completed successfully" if proc.returncode == 0 else (err[:1024] if err else "Scan failed")
+            "summary": "Deep scan completed successfully" if out.strip() else (err[:1024] if err else "Scan produced no output")
         }
     except Exception as e:
         return {"ok": False, "ip": str(ip_obj), "error": str(e)}
