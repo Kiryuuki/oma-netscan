@@ -13,7 +13,7 @@ OmaNetscan is a native local network discovery, service fingerprinting, and secu
 - On-Demand Deep Scan: Runs targeted service and OS inspection asynchronously when requested.
 - Desktop Notifications: Dispatches native Omarchy notifications when new previously unseen devices connect to your network.
 - Ultra-Lightweight Polling: Performs single-packet liveness checks on verified hosts to ensure zero network or device performance impact.
-- Zero Privilege Escalation: Operates 100% unprivileged with standard socket networking and requires no sudo, pkexec, or root capabilities.
+- Zero Privilege Escalation: Operates completely unprivileged using user-space networking and kernel ARP tables without elevated system permissions.
 - Descriptor-Safe Storage: Writes local state atomically with mode 0600 under restrictive permissions.
 
 ## Installation
@@ -24,7 +24,7 @@ Install using the Omarchy plugin manager:
 omaplug install kiryuuki.oma-netscan
 ```
 
-OmaNetscan operates completely unprivileged as your regular desktop user and works out-of-the-box without root permissions or special setup.
+OmaNetscan operates completely unprivileged as your regular desktop user and works out-of-the-box without elevated permissions or special setup.
 
 ## Keyboard Shortcuts
 
