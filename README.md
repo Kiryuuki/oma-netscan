@@ -31,16 +31,37 @@ OmaNetscan operates completely unprivileged as your regular desktop user and wor
 | Key | Action |
 |---|---|
 | r | Rescan local network subnet |
+| n | Choose the network range to scan |
 | 1 | Switch to All hosts tab |
-| 2 | Switch to Active / Verified hosts tab |
-| 3 | Switch to Attention / AP hosts tab |
-| 4 | Switch to Security Risks tab |
+| 2 | Switch to Nodes tab (hypervisors, routers, DNS) |
+| 3 | Switch to LXC/OS tab (containers, Ubuntu/Debian) |
+| 4 | Switch to Exposed tab (hosts with web-facing ports) |
+| 5 | Switch to Clients tab (workstations, phones, cameras) |
+| 6 | Switch to Audits tab (hosts with security warnings) |
 | d | Trigger deep port and service scan on selected host |
 | c | Copy selected host IP to clipboard |
 | m | Copy selected host MAC address to clipboard |
 | e / Enter | Expand or collapse repeater downstream devices |
 | Up / Down | Navigate host list |
 | Esc | Close flyout panel |
+
+## Choosing the range
+
+By default OmaNetscan scans the network behind the machine's default route, so a VPN that takes over the route is scanned instead of the LAN. Press `n` or click the range line in the panel header to pick a different one: every private interface the engine can verify is offered (LAN, tunnel, mesh), each with its CIDR, interface and address. The choice is stored in the plugin's settings and a scan starts at once. Choosing Default returns to following the route. Tunnels and meshes are scanned around the machine's own /24 rather than the whole route, so a /16 mesh stays quick.
+
+If a stored range is no longer carried by any interface, the header marks it as not detected and the engine scans the default route instead, saying so under the header.
+
+The engine takes the same choices on the command line: `python3 scripts/netscan_engine.py --list-networks` prints the ranges it would offer, and `--scan --subnet CIDR` scans one of them.
+
+## Settings
+
+The bar widget keeps its settings in the shell's layout entry for the plugin:
+
+| Key | Default | Meaning |
+|---|---|---|
+| refreshIntervalMin | 15 | Minutes between background scans; also set from the Auto-scan chips in the panel |
+| autoRefresh | true | Whether background scans run at all |
+| scanSubnet | "" | The range picked with `n`; empty follows the default route |
 
 ## Removal
 
