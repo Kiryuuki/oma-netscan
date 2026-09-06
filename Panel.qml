@@ -46,6 +46,43 @@ Panel {
   property string copyNotice: ""
   property int selectedIntervalMin: (settings && settings.refreshIntervalMin) ? settings.refreshIntervalMin : 15
 
+  // The engine's --list-networks document and the range picked for scanning
+  // (empty follows the default route). Both are injected by the host widget.
+  property var networks: null
+  property string scanSubnet: ""
+
+  // Rows for the range picker: the default route first, then one row per
+  // verified local network.
+  readonly property var rangeRows: {
+    var list = (root.networks && root.networks.networks) ? root.networks.networks : []
+    var def = null
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].isDefault) { def = list[i]; break }
+    }
+    var rows = [{
+      id: "",
+      name: "Default",
+      detail: def ? "follows the route: " + def.cidr + " via " + def.iface : "no default route",
+      kind: "default"
+    }]
+    for (var j = 0; j < list.length; j++) {
+      var n = list[j]
+      rows.push({ id: n.cidr, name: n.cidr, detail: n.iface + " · " + n.kind + " · " + n.ip, kind: n.kind })
+    }
+    return rows
+  }
+
+  // A picked range that no interface carries any more: the engine falls back
+  // to the default route and says so in scanNote, and the header flags it.
+  readonly property bool scanSubnetDetected: {
+    if (root.scanSubnet === "" || root.networks === null) return true
+    var list = root.networks.networks || []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].cidr === root.scanSubnet) return true
+    }
+    return false
+  }
+
   function open() { root.controller.show() }
   function close() { root.controller.hide() }
   function toggle() { if (root.opened) close(); else open(); }
@@ -63,10 +100,22 @@ Panel {
     noticeTimer.restart()
   }
 
+  // Opening the picker is its own action so the "n" key and the header
+  // trigger share one path. The list is refreshed first so a tunnel that came
+  // up since the panel last opened is offered.
+  function openRangePicker() {
+    if (hostWidget && typeof hostWidget.refreshNetworks === "function") hostWidget.refreshNetworks()
+    Qt.callLater(function() {
+      var scene = rangeTrigger.mapToGlobal(0, 0)
+      rangeSwitcher.openAt(scene.x, scene.y)
+    })
+  }
+
   onOpenedChanged: {
     if (root.opened) {
       keyCatcher.forceActiveFocus()
       root.selectedIndex = 0
+      if (hostWidget && typeof hostWidget.refreshNetworks === "function") hostWidget.refreshNetworks()
     }
   }
 
@@ -238,6 +287,7 @@ Panel {
       }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
+        else if (t === "n" || t === "N") root.openRangePicker()
         else if (t === "1") { root.activeTab = "all"; root.selectedIndex = 0 }
         else if (t === "2") { root.activeTab = "servers"; root.selectedIndex = 0 }
         else if (t === "3") { root.activeTab = "lxc"; root.selectedIndex = 0 }
@@ -258,6 +308,13 @@ Panel {
           var h = root.getSelectedHost()
           if (h && h.isRepeater) root.toggleRepeaterExpand(h.mac)
         }
+      }
+
+      RangeSwitcher {
+        id: rangeSwitcher
+        ranges: root.rangeRows
+        activeId: root.scanSubnet
+        onChosen: function(id) { if (root.hostWidget) root.hostWidget.selectSubnet(id) }
       }
 
       Flickable {
@@ -308,12 +365,69 @@ Panel {
                   font.bold: true
                   color: root.contentForeground
                 }
-                Text {
-                  textFormat: Text.PlainText
-                  text: root.netscanData.subnet + " · Gateway: " + root.netscanData.gatewayIp
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.caption
-                  color: root.contentSubtle
+                // The range trigger, built by hand rather than from Button so
+                // it can carry the four-state fill and light up while its
+                // menu is open.
+                Item {
+                  id: rangeTrigger
+                  // Sized from the labels' natural widths, never from the
+                  // row, whose width is anchored to this item.
+                  readonly property real labelSpace: width - Style.space(12) - (rangeMissing.visible ? rangeMissing.implicitWidth : 0)
+                  width: Math.min(Style.space(400), rangeLabel.implicitWidth + (rangeMissing.visible ? rangeMissing.implicitWidth : 0) + Style.space(12))
+                  implicitHeight: Style.space(18)
+
+                  readonly property bool selected: rangeSwitcher.opened
+
+                  Rectangle {
+                    anchors.fill: parent
+                    radius: Style.cornerRadius
+                    color: rangeMouse.pressed
+                           ? Style.selectedFillFor(root.contentForeground, Color.accent)
+                           : (rangeTrigger.selected || rangeMouse.containsMouse
+                              ? Style.hoverFillFor(root.contentForeground, Color.accent) : "transparent")
+                  }
+
+                  Row {
+                    id: rangeLabelRow
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(6)
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(6)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 0
+
+                    Text {
+                      id: rangeLabel
+                      width: Math.max(0, Math.min(implicitWidth, rangeTrigger.labelSpace))
+                      textFormat: Text.PlainText
+                      text: "▴ " + root.netscanData.subnet
+                            + " · " + (root.netscanData.scanIface || "?")
+                            + (root.netscanData.scanMode === "default" ? " · default" : "")
+                            + (root.netscanData.gatewayIp ? " · gw " + root.netscanData.gatewayIp : "")
+                      elide: Text.ElideRight
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                      color: rangeTrigger.selected || rangeMouse.containsMouse ? root.contentForeground : root.contentSubtle
+                    }
+
+                    Text {
+                      id: rangeMissing
+                      visible: !root.scanSubnetDetected
+                      textFormat: Text.PlainText
+                      text: " · not detected"
+                      font.family: root.contentFontFamily
+                      font.pixelSize: Style.font.caption
+                      color: Color.urgent
+                    }
+                  }
+
+                  MouseArea {
+                    id: rangeMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openRangePicker()
+                  }
                 }
               }
             }
@@ -391,6 +505,18 @@ Panel {
                 }
               }
             }
+          }
+
+          // The engine's word on a range it could not honour.
+          Text {
+            visible: !!root.netscanData.scanNote
+            width: parent.width - Style.space(28)
+            textFormat: Text.PlainText
+            text: root.netscanData.scanNote || ""
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+            color: Color.urgent
+            wrapMode: Text.WordWrap
           }
 
           // --- REFRESH RATE CONTROLS ROW (1m, 15m, 60m, Custom) ---
@@ -1055,7 +1181,7 @@ Panel {
                 // Shortcut 2
                 Row {
                   spacing: 4
-                  Rectangle { height: 16; width: 22; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "1-4"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Rectangle { height: 16; width: 22; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "1-6"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
                   Text { textFormat: Text.PlainText; text: "Tabs"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
                 // Shortcut 3
@@ -1089,6 +1215,12 @@ Panel {
                   Text { textFormat: Text.PlainText; text: "Toggle AP"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
                 }
                 // Shortcut 7
+                Row {
+                  spacing: 4
+                  Rectangle { height: 16; width: 16; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "n"; font.pixelSize: 10; font.bold: true; color: Color.accent } }
+                  Text { textFormat: Text.PlainText; text: "Range"; font.family: root.contentFontFamily; font.pixelSize: 11; color: root.contentSubtle }
+                }
+                // Shortcut 8
                 Row {
                   spacing: 4
                   Rectangle { height: 16; implicitWidth: 26; radius: 3; color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.2); Text { anchors.centerIn: parent; text: "Esc"; font.pixelSize: 10; font.bold: true; color: Color.accent } }

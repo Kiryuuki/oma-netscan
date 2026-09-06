@@ -20,7 +20,8 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalMin": 15,
-      "autoRefresh": true
+      "autoRefresh": true,
+      "scanSubnet": ""
     },
     "schema": [
       {
@@ -38,6 +39,13 @@
         "type": "boolean",
         "label": "Enable periodic background scanning",
         "defaultValue": true
+      },
+      {
+        "key": "scanSubnet",
+        "type": "string",
+        "label": "Scan range",
+        "description": "Set by the range picker in the panel (n). Empty follows the default route.",
+        "defaultValue": ""
       }
     ]
   }

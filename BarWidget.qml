@@ -10,6 +10,10 @@ BarWidget {
 
   readonly property string stateDir: (Quickshell.env("HOME") || "") + "/.local/state/omarchy/netscan"
   readonly property string stateFilePath: stateDir + "/devices.json"
+  readonly property string enginePath: (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/kiryuuki.oma-netscan/scripts/netscan_engine.py"
+
+  // The range the user picked in the panel; empty follows the default route.
+  readonly property string scanSubnet: (settings && typeof settings.scanSubnet === "string") ? settings.scanSubnet : ""
 
   property var netscanState: ({
     updatedAt: 0,
@@ -31,6 +35,11 @@ BarWidget {
   property bool isScanning: false
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
 
+  // The engine's --list-networks document: { defaultIface, defaultGateway,
+  // networks: [{ iface, ip, cidr, gateway, kind, isDefault }] }. Null until
+  // the first listing has returned.
+  property var networks: null
+
   function injectPanel() {
     var target = panelLoader.item
     if (!target) return
@@ -40,12 +49,38 @@ BarWidget {
     if ("hostWidget" in target) target.hostWidget = root
     if ("netscanData" in target) target.netscanData = root.netscanState
     if ("isScanning" in target) target.isScanning = root.isScanning
+    if ("networks" in target) target.networks = root.networks
+    if ("scanSubnet" in target) target.scanSubnet = root.scanSubnet
   }
 
   function refresh() {
     if (root.isScanning) return
+    root.refreshNetworks()
     root.isScanning = true
     scanProcess.running = true
+  }
+
+  function refreshNetworks() {
+    if (listProcess.running) return
+    listProcess.running = true
+  }
+
+  // Read-modify-write of this widget's inline shell.json entry, so a choice
+  // made in the panel survives a shell restart.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function selectSubnet(cidr) {
+    if (cidr === root.scanSubnet) return
+    root.persistSettings({ scanSubnet: cidr })
+    root.injectPanel()
+    root.refresh()
   }
 
   function togglePanel() {
@@ -89,11 +124,31 @@ BarWidget {
 
   Process {
     id: scanProcess
-    command: ["/usr/bin/python3", (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/kiryuuki.oma-netscan/scripts/netscan_engine.py", "--scan"]
+    command: root.scanSubnet !== ""
+      ? ["/usr/bin/python3", root.enginePath, "--scan", "--subnet", root.scanSubnet]
+      : ["/usr/bin/python3", root.enginePath, "--scan"]
     onExited: function(code) {
       root.isScanning = false
       stateFile.reload()
       root.injectPanel()
+    }
+  }
+
+  Process {
+    id: listProcess
+    command: ["/usr/bin/python3", root.enginePath, "--list-networks"]
+    stdout: StdioCollector {
+      id: listOut
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var parsed = JSON.parse(listOut.text)
+          if (parsed && typeof parsed === "object" && Array.isArray(parsed.networks)) {
+            root.networks = parsed
+            root.injectPanel()
+          }
+        } catch (e) {}
+      }
     }
   }
 
