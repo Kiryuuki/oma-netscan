@@ -283,13 +283,33 @@ def write_atomic(path, data, max_bytes=MAX_STATE_BYTES):
         os.close(dir_fd)
 
 
+# The shared address space of RFC 6598, which WireGuard meshes such as NetBird
+# and Tailscale hand out. Python does not count it as private, but it is never
+# routed on the public internet, which is the property the checks below need.
+CGNAT_SPACE = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_local_address(addr) -> bool:
+    """Private or shared address space, never loopback or multicast."""
+    if addr.is_loopback or addr.is_multicast:
+        return False
+    return addr.is_private or addr in CGNAT_SPACE
+
+
+def is_local_network(net) -> bool:
+    """A network a sweep may cover: private or shared space, not loopback."""
+    if net.is_loopback:
+        return False
+    return net.is_private or net.subnet_of(CGNAT_SPACE)
+
+
 def is_ip_in_local_subnets(ip_str: str, networks: list) -> bool:
     """Proves an IP belongs to a verified active local interface subnet."""
     if not ip_str:
         return False
     try:
         addr = ipaddress.ip_address(ip_str.strip())
-        if not addr.is_private or addr.is_loopback or addr.is_multicast:
+        if not is_local_address(addr):
             return False
         return any(addr in n["network"] for n in networks)
     except ValueError:
@@ -344,7 +364,7 @@ def get_verified_local_networks():
                     continue
                 try:
                     net = ipaddress.ip_network(cidr, strict=False)
-                    if net.is_private and not net.is_loopback:
+                    if is_local_network(net):
                         networks.append({
                             "iface": iface,
                             "ip": cidr.split("/")[0],
@@ -359,14 +379,87 @@ def get_verified_local_networks():
 
 
 def get_local_ip_and_subnet():
-    gw, iface = get_default_gateway()
+    local_ip, subnet, _, _, _, _ = resolve_scan_target(None)
+    return local_ip, subnet
+
+
+TUNNEL_PREFIXES = ("tun", "tap", "ppp")
+MESH_PREFIXES = ("wt", "wg", "nebula", "tailscale", "zt")
+
+
+def interface_kind(iface: str) -> str:
+    """Names what an interface is for the range picker: a tunnel and a mesh
+    have no broadcast domain, so a sweep over them finds only what answers."""
+    if iface.startswith(TUNNEL_PREFIXES):
+        return "tunnel"
+    if iface.startswith(MESH_PREFIXES):
+        return "mesh"
+    return "lan"
+
+
+def get_default_routes() -> dict:
+    """Every default route as {iface: gateway}. The first one is what the
+    machine uses; the others still name the gateway of their own interface."""
+    routes = {}
+    try:
+        out, _ = run_bounded_process(["ip", "route", "show", "default"], timeout=2.0, max_bytes=4096)
+        for m in re.finditer(r"default via (\d+\.\d+\.\d+\.\d+) dev (\S+)", out):
+            routes.setdefault(m.group(2), m.group(1))
+    except Exception:
+        pass
+    return routes
+
+
+def list_networks() -> dict:
+    """The verified local networks as the panel's range picker shows them,
+    with the one the default route uses marked."""
+    _, default_iface = get_default_gateway()
+    routes = get_default_routes()
+    networks = []
+    for n in get_verified_local_networks():
+        networks.append({
+            "iface": n["iface"],
+            "ip": n["ip"],
+            "cidr": n["cidr"],
+            "gateway": routes.get(n["iface"], ""),
+            "kind": interface_kind(n["iface"]),
+            "isDefault": n["iface"] == default_iface,
+        })
+    has_default = any(n["isDefault"] for n in networks)
+    return {
+        "defaultIface": default_iface if has_default else "",
+        "defaultGateway": routes.get(default_iface, "") if has_default else "",
+        "networks": networks,
+    }
+
+
+def resolve_scan_target(subnet_override):
+    """Picks the range a scan covers.
+
+    A requested range must be one of the verified local networks, so nothing
+    typed anywhere can widen the sweep; anything else is ignored with a note
+    and the default route's network is used, as it always was.
+
+    Returns (local_ip, subnet, gateway_ip, iface, mode, note) where mode is
+    "selected" or "default".
+    """
     networks = get_verified_local_networks()
+    routes = get_default_routes()
+    note = ""
+    if subnet_override:
+        wanted = subnet_override.strip()
+        for n in networks:
+            if n["cidr"] == wanted:
+                return n["ip"], n["cidr"], routes.get(n["iface"], ""), n["iface"], "selected", ""
+        note = f"{wanted} is not a verified local network; scanned the default route instead"
+    gw, iface = get_default_gateway()
     for n in networks:
         if n["iface"] == iface:
-            return n["ip"], n["cidr"]
+            return n["ip"], n["cidr"], gw, iface, "default", note
     if networks:
-        return networks[0]["ip"], networks[0]["cidr"]
-    return "192.168.100.3", "192.168.100.0/24"
+        n = networks[0]
+        return n["ip"], n["cidr"], routes.get(n["iface"], ""), n["iface"], "default", note
+    return "192.168.100.3", "192.168.100.0/24", gw, iface, "default", note
 
 
 def discover_mdns_devices():
@@ -681,11 +774,10 @@ def audit_host_security_and_fingerprint(ip: str, vendor: str, open_ports: list, 
     return "Generic Host", "󰖩", m_name or (vendor if vendor != "Unknown" else "Generic Device"), warnings, risk_level, ("orange" if not open_ports else "green"), ("Idle client with no common service ports listening" if not open_ports else "Generic host with active ports")
 
 
-def perform_network_scan():
+def perform_network_scan(subnet_override=None):
     """Performs full ARP, mDNS, SSH banner OS discovery, persistent cache merge, and security audits."""
     raw_devices = []
-    local_ip, subnet = get_local_ip_and_subnet()
-    gateway_ip, gateway_iface = get_default_gateway()
+    local_ip, subnet, gateway_ip, scan_iface, scan_mode, scan_note = resolve_scan_target(subnet_override)
     has_cap_error = False
 
     prev_state = load_previous_state()
@@ -701,10 +793,21 @@ def perform_network_scan():
     if not active_net and networks:
         active_net = networks[0]["network"]
 
+    # A chosen range admits only its own neighbours, so the list is the range
+    # that was asked for; the default keeps admitting every interface.
+    admitted = [n for n in networks if n["cidr"] == subnet] if scan_mode == "selected" else networks
+    if not admitted:
+        admitted = networks
+
     # Bound sweep budget to maximum 256 hosts per sweep to prevent excessive packet flooding
     target_hosts = []
+    sweep_net = active_net
     if active_net:
-        for idx, host_ip in enumerate(active_net.hosts()):
+        if active_net.prefixlen < 24:
+            # A wide range is swept around the interface's own address: the
+            # first 256 addresses of a /16 are rarely anyone's neighbourhood.
+            sweep_net = ipaddress.ip_network(f"{local_ip}/24", strict=False)
+        for idx, host_ip in enumerate(sweep_net.hosts()):
             if idx >= 256:
                 break
             target_hosts.append(str(host_ip))
@@ -740,7 +843,7 @@ def perform_network_scan():
                 mac = parts[1].strip().lower()
                 vendor = parts[2].strip() if len(parts) > 2 else ""
                 if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and len(mac) == 17:
-                    if is_ip_in_local_subnets(ip, networks):
+                    if is_ip_in_local_subnets(ip, admitted):
                         raw_devices.append({"ip": ip, "mac": mac, "rawVendor": vendor})
                         if len(raw_devices) >= 256:
                             break
@@ -762,7 +865,7 @@ def perform_network_scan():
                     if len(parts) >= 4:
                         ip, mac = parts[0], parts[3].lower()
                         if len(mac) == 17 and mac != "00:00:00:00:00:00":
-                            if is_ip_in_local_subnets(ip, networks) and not any(d["ip"] == ip for d in raw_devices):
+                            if is_ip_in_local_subnets(ip, admitted) and not any(d["ip"] == ip for d in raw_devices):
                                 raw_devices.append({"ip": ip, "mac": mac, "rawVendor": ""})
     except Exception:
         pass
@@ -775,7 +878,7 @@ def perform_network_scan():
             if m:
                 ip, mac, state = m.group(1), m.group(2).lower(), m.group(3)
                 if state in ("REACHABLE", "STALE", "DELAY"):
-                    if is_ip_in_local_subnets(ip, networks) and not any(d["ip"] == ip for d in raw_devices):
+                    if is_ip_in_local_subnets(ip, admitted) and not any(d["ip"] == ip for d in raw_devices):
                         raw_devices.append({"ip": ip, "mac": mac, "rawVendor": ""})
                         if len(raw_devices) >= 256:
                             break
@@ -783,9 +886,9 @@ def perform_network_scan():
         pass
 
     # Ensure Gateway & Local Host are included
-    if gateway_ip and is_ip_in_local_subnets(gateway_ip, networks) and not any(d["ip"] == gateway_ip for d in raw_devices):
+    if gateway_ip and is_ip_in_local_subnets(gateway_ip, admitted) and not any(d["ip"] == gateway_ip for d in raw_devices):
         raw_devices.append({"ip": gateway_ip, "mac": "", "rawVendor": ""})
-    if local_ip and is_ip_in_local_subnets(local_ip, networks) and not any(d["ip"] == local_ip for d in raw_devices):
+    if local_ip and is_ip_in_local_subnets(local_ip, admitted) and not any(d["ip"] == local_ip for d in raw_devices):
         raw_devices.append({"ip": local_ip, "mac": "", "rawVendor": ""})
 
     # Deduplicate by IP
@@ -1010,6 +1113,10 @@ def perform_network_scan():
     doc = {
         "updatedAt": now_ts,
         "subnet": subnet,
+        "scanIface": scan_iface,
+        "scanMode": scan_mode,
+        "scanNote": scan_note,
+        "sweepRange": str(sweep_net) if sweep_net else "",
         "localIp": local_ip,
         "gatewayIp": gateway_ip,
         "gatewayOnline": True,
@@ -1028,7 +1135,7 @@ def perform_network_scan():
     }
 
     write_atomic(STATE_FILE, doc)
-    print(f"Scan complete: {total_distinct_hosts} distinct/promoted hosts, {repeaters_count} repeaters ({total_downstream_hosts} idle devices), Green:{green_count} Orange:{orange_count} Red:{red_count}.")
+    print(f"Scan complete on {subnet} via {scan_iface} ({scan_mode}, swept {sweep_net}): {total_distinct_hosts} distinct/promoted hosts, {repeaters_count} repeaters ({total_downstream_hosts} idle devices), Green:{green_count} Orange:{orange_count} Red:{red_count}.")
     return doc
 
 
@@ -1051,7 +1158,7 @@ def run_deep_scan(target_ip: str):
     """Executes single-host nmap -sV -O with strict private subnet validation and bounded output."""
     try:
         ip_obj = ipaddress.ip_address(target_ip.strip())
-        if not ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast:
+        if not is_local_address(ip_obj):
             return {"ok": False, "error": "Target must be a private IPv4 address on the local network"}
 
         # Validate that target falls inside one of the verified local network interfaces
@@ -1083,13 +1190,17 @@ def main():
     parser = argparse.ArgumentParser(description="OmaNetscan Engine")
     parser.add_argument("--scan", action="store_true", help="Run full network discovery and fingerprinting")
     parser.add_argument("--deep-scan", help="Run single-host nmap deep scan on IP")
+    parser.add_argument("--subnet", help="Scan this verified local range instead of the default route's (a CIDR from --list-networks)")
+    parser.add_argument("--list-networks", action="store_true", help="Print the verified local networks as JSON and exit")
     args = parser.parse_args()
 
-    if args.deep_scan:
+    if args.list_networks:
+        print(json.dumps(list_networks()))
+    elif args.deep_scan:
         res = run_deep_scan(args.deep_scan)
         print(json.dumps(res, indent=2))
     else:
-        perform_network_scan()
+        perform_network_scan(args.subnet)
 
 
 if __name__ == "__main__":
