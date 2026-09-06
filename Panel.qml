@@ -93,9 +93,7 @@ Panel {
   function setIntervalMin(m) {
     root.selectedIntervalMin = m
     if (root.settings) root.settings.refreshIntervalMin = m
-    if (hostWidget && hostWidget.autoScanTimer) {
-      hostWidget.autoScanTimer.interval = m * 60 * 1000
-    }
+    if (hostWidget && typeof hostWidget.setRefreshInterval === "function") hostWidget.setRefreshInterval(m)
     root.copyNotice = "Refresh set to " + m + "m"
     noticeTimer.restart()
   }

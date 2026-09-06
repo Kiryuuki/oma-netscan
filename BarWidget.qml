@@ -83,6 +83,11 @@ BarWidget {
     root.refresh()
   }
 
+  function setRefreshInterval(m) {
+    root.persistSettings({ refreshIntervalMin: m })
+    autoScanTimer.interval = Math.max(1, m) * 60 * 1000
+  }
+
   function togglePanel() {
     if (panelLoader.item && panelLoader.item.toggle) panelLoader.item.toggle()
   }
