@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "kiryuuki.oma-netscan",
   "name": "OmaNetscan",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Kiryuuki",
   "license": "Source-Available Non-Commercial (PolyForm-Noncommercial-1.0.0)",
   "description": "Local network discovery, service fingerprinting, and security audit sidepanel for Omarchy Desktop. Fast ARP discovery, proxy-ARP repeater de-duplication, offline OUI vendor lookup, and on-demand port inspection.",
